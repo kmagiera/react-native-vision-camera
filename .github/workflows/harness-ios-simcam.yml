@@ -1,0 +1,18 @@
+name: Harness iOS Simulator (SimCam)
+
+# GitHub requires this file on the default branch to allow workflow_dispatch.
+# Select kmagiera/simcam-harness-ci to run the full workflow from PR #4072.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  select-harness-branch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the harness branch
+        run: |
+          echo '::error::Run this workflow with branch kmagiera/simcam-harness-ci (PR #4072).'
+          exit 1
