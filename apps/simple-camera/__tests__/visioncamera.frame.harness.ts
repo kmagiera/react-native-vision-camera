@@ -1,8 +1,11 @@
 import {
+  assert,
   beforeAll,
   describe,
   expect,
+  fn,
   it,
+  waitFor,
   waitUntil,
 } from 'react-native-harness'
 import type {
@@ -52,8 +55,7 @@ describe('VisionCamera - Frame', () => {
     expect(VisionCamera.cameraPermissionStatus).toBe('authorized')
     factory = await VisionCamera.createDeviceFactory()
     const back = factory.getDefaultCamera('back')
-    expect(back).toBeDefined()
-    if (back == null) throw new Error('no back camera')
+    assert.exists(back, 'no back camera')
     backDevice = back
   })
 
@@ -163,7 +165,6 @@ describe('VisionCamera - Frame', () => {
           15_000,
           `receive ${targetPixelFormat} frame pixel format`,
         )
-        console.log(`${targetPixelFormat} frame pixel format: ${pixelFormat}`)
         expect(expectedPixelFormats).toContain(pixelFormat)
       } finally {
         runtime.setOnFrameCallback(frameOutput, undefined)
@@ -312,19 +313,14 @@ describe('VisionCamera - Frame', () => {
     ])
 
     type BufferReport = {
-      frameBytes: number
       firstPlaneBytes: number[]
       secondPlaneBytes: number[]
     }
     const receivedBufferReports = deferred<BufferReport[]>()
     const bufferReports: BufferReport[] = []
-    const report = (
-      frameBytes: number,
-      firstPlaneBytes: number[],
-      secondPlaneBytes: number[],
-    ) => {
+    const report = (firstPlaneBytes: number[], secondPlaneBytes: number[]) => {
       if (bufferReports.length < 3) {
-        bufferReports.push({ frameBytes, firstPlaneBytes, secondPlaneBytes })
+        bufferReports.push({ firstPlaneBytes, secondPlaneBytes })
         if (bufferReports.length >= 3) {
           receivedBufferReports.resolve(bufferReports)
         }
@@ -339,7 +335,6 @@ describe('VisionCamera - Frame', () => {
     runtime.setOnFrameCallback(frameOutput, (frame) => {
       'worklet'
       try {
-        const frameBytes = frame.getPixelBuffer().byteLength
         const planes = frame.getPlanes()
         const firstPlaneBytes = planes.map(
           (plane) => plane.getPixelBuffer().byteLength,
@@ -347,7 +342,7 @@ describe('VisionCamera - Frame', () => {
         const secondPlaneBytes = planes.map(
           (plane) => plane.getPixelBuffer().byteLength,
         )
-        scheduleOnRN(report, frameBytes, firstPlaneBytes, secondPlaneBytes)
+        scheduleOnRN(report, firstPlaneBytes, secondPlaneBytes)
       } catch (e) {
         scheduleOnRN(reportError, String(e))
       } finally {
@@ -370,8 +365,7 @@ describe('VisionCamera - Frame', () => {
     }
 
     for (const bufferReport of reports) {
-      expect(bufferReport.frameBytes).toBeGreaterThan(0)
-      expect(bufferReport.firstPlaneBytes.length).toBeGreaterThan(0)
+      expect(bufferReport.firstPlaneBytes).not.toHaveLength(0)
       expect(bufferReport.firstPlaneBytes).toEqual(
         bufferReport.secondPlaneBytes,
       )
@@ -443,9 +437,6 @@ describe('VisionCamera - Frame', () => {
       errorSub.remove()
       await session.stop()
     }
-    console.log(
-      `yuv frame reported ${reportedWidth}x${reportedHeight} planes=${reportedPlanes} pixelFormat=${reportedPixelFormat}`,
-    )
     expect(reportedWidth).toBeGreaterThan(0)
     expect(reportedHeight).toBeGreaterThan(0)
     expect(reportedPlanes).toBeGreaterThanOrEqual(1)
@@ -557,7 +548,7 @@ describe('VisionCamera - Frame', () => {
   // snaps every request to a default resolution would slip through.
   it("streams frames at the device's maximum supported frame resolution", async () => {
     const supported = backDevice.getSupportedResolutions('stream')
-    expect(supported.length).toBeGreaterThan(0)
+    expect(supported).not.toHaveLength(0)
     const max = supported.reduce((a, b) =>
       a.width * a.height > b.width * b.height ? a : b,
     )
@@ -614,16 +605,12 @@ describe('VisionCamera - Frame', () => {
 
       // currentResolution should match what's actually being streamed.
       const reported = frameOutput.currentResolution
-      expect(reported).toBeDefined()
-      if (reported == null) throw new Error('no reported frame resolution')
+      assert.exists(reported, 'no reported frame resolution')
       const reportedShortEdge = Math.min(reported.width, reported.height)
       const reportedLongEdge = Math.max(reported.width, reported.height)
       expect(reportedShortEdge).toBe(streamedShortEdge)
       expect(reportedLongEdge).toBe(streamedLongEdge)
 
-      console.log(
-        `max device stream res=${max.width}x${max.height} reported=${reported.width}x${reported.height} streamed=${receivedWidth}x${receivedHeight}`,
-      )
       expect(streamedShortEdge).toBe(requestedShortEdge)
       expect(streamedLongEdge).toBe(requestedLongEdge)
     } finally {
@@ -635,7 +622,7 @@ describe('VisionCamera - Frame', () => {
 
   it("streams frames at the device's minimum supported frame resolution", async () => {
     const supported = backDevice.getSupportedResolutions('stream')
-    expect(supported.length).toBeGreaterThan(0)
+    expect(supported).not.toHaveLength(0)
     const min = supported.reduce((a, b) =>
       a.width * a.height < b.width * b.height ? a : b,
     )
@@ -691,16 +678,12 @@ describe('VisionCamera - Frame', () => {
       const streamedLongEdge = Math.max(receivedWidth, receivedHeight)
 
       const reported = frameOutput.currentResolution
-      expect(reported).toBeDefined()
-      if (reported == null) throw new Error('no reported frame resolution')
+      assert.exists(reported, 'no reported frame resolution')
       const reportedShortEdge = Math.min(reported.width, reported.height)
       const reportedLongEdge = Math.max(reported.width, reported.height)
       expect(reportedShortEdge).toBe(streamedShortEdge)
       expect(reportedLongEdge).toBe(streamedLongEdge)
 
-      console.log(
-        `min device stream res=${min.width}x${min.height} reported=${reported.width}x${reported.height} streamed=${receivedWidth}x${receivedHeight}`,
-      )
       expect(streamedShortEdge).toBe(requestedShortEdge)
       expect(streamedLongEdge).toBe(requestedLongEdge)
     } finally {
@@ -733,10 +716,8 @@ describe('VisionCamera - Frame', () => {
       },
     ])
 
-    let droppedReason: FrameDroppedReason | undefined
-    frameOutput.setOnFrameDroppedCallback((reason) => {
-      droppedReason = reason
-    })
+    const onFrameDropped = fn<(reason: FrameDroppedReason) => void>()
+    frameOutput.setOnFrameDroppedCallback(onFrameDropped)
 
     const runtime = workletsProvider.createRuntimeForThread(frameOutput.thread)
     runtime.setOnFrameCallback(frameOutput, (frame) => {
@@ -751,8 +732,12 @@ describe('VisionCamera - Frame', () => {
 
     await session.start()
     try {
-      await waitUntil(() => droppedReason != null, { timeout: 15_000 })
-      console.log(`frame dropped reason: ${droppedReason}`)
+      await waitFor(
+        () => {
+          expect(onFrameDropped).toHaveBeenCalled()
+        },
+        { timeout: 15_000 },
+      )
     } finally {
       runtime.setOnFrameCallback(frameOutput, undefined)
       frameOutput.setOnFrameDroppedCallback(undefined)
@@ -807,9 +792,6 @@ describe('VisionCamera - Frame', () => {
       runtime.setOnFrameCallback(frameOutput, undefined)
       await session.stop()
     }
-    console.log(
-      `preview-sized frame: ${reportedWidth}x${reportedHeight} (requested target ${CommonResolutions.UHD_16_9.width}x${CommonResolutions.UHD_16_9.height})`,
-    )
     const requestedPixels =
       CommonResolutions.UHD_16_9.width * CommonResolutions.UHD_16_9.height
     const actualPixels = reportedWidth * reportedHeight

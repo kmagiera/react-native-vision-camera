@@ -10,6 +10,7 @@ package com.margelo.nitro.camera
 import androidx.annotation.Keep
 import com.facebook.jni.HybridData
 import com.facebook.proguard.annotations.DoNotStrip
+import dalvik.annotation.optimization.FastNative
 import com.margelo.nitro.core.HybridObject
 
 /**
@@ -28,7 +29,23 @@ abstract class HybridTapToFocusGestureControllerSpec: HybridGestureControllerSpe
   
 
   // Methods
+  abstract fun addOnTapListener(onTap: (point: HybridMeteringPointSpec) -> Unit): ListenerSubscription
   
+  @DoNotStrip
+  @Keep
+  private fun addOnTapListener_cxx(onTap: Func_void_std__shared_ptr_HybridMeteringPointSpec_): ListenerSubscription {
+    val __result = addOnTapListener(onTap)
+    return __result
+  }
+
+  abstract fun addOnFocusCompletedListener(onFocusCompleted: (point: HybridMeteringPointSpec) -> Unit): ListenerSubscription
+
+  @DoNotStrip
+  @Keep
+  private fun addOnFocusCompletedListener_cxx(onFocusCompleted: Func_void_std__shared_ptr_HybridMeteringPointSpec_): ListenerSubscription {
+    val __result = addOnFocusCompletedListener(onFocusCompleted)
+    return __result
+  }
 
   // Default implementation of `HybridObject.toString()`
   override fun toString(): String {
@@ -40,6 +57,7 @@ abstract class HybridTapToFocusGestureControllerSpec: HybridGestureControllerSpe
   @Keep
   protected open class CxxPart(javaPart: HybridTapToFocusGestureControllerSpec): HybridGestureControllerSpec.CxxPart(javaPart) {
     // C++ JHybridTapToFocusGestureControllerSpec::CxxPart::initHybrid(...)
+    @FastNative
     external override fun initHybrid(): HybridData
   }
   override fun createCxxPart(): CxxPart {

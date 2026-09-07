@@ -1,10 +1,10 @@
 import { type LayoutChangeEvent, Platform, StyleSheet } from 'react-native'
 import {
-  afterEach,
+  assert,
   beforeAll,
-  cleanup,
   describe,
   expect,
+  fn,
   it,
   render,
   waitUntil,
@@ -34,16 +34,8 @@ describe('VisionCamera - Coordinates', () => {
     expect(VisionCamera.cameraPermissionStatus).toBe('authorized')
     factory = await VisionCamera.createDeviceFactory()
     const back = factory.getDefaultCamera('back')
-    expect(back).toBeDefined()
-    if (back == null) throw new Error('no back camera')
+    assert.exists(back, 'no back camera')
     backDevice = back
-  })
-
-  // Every test that renders a view must unmount it so the next test starts
-  // from a clean overlay. (cleanup() is a no-op for the worklet-only tests
-  // that never called render().)
-  afterEach(() => {
-    cleanup()
   })
 
   // ---------------------------------------------------------------------------
@@ -82,10 +74,8 @@ describe('VisionCamera - Coordinates', () => {
     const onReport = (r: Report) => {
       report = r
     }
-    let sessionError: Error | undefined
-    const errorSub = session.addOnErrorListener((error) => {
-      sessionError = error
-    })
+    const onError = fn<(error: Error) => void>()
+    const errorSub = session.addOnErrorListener(onError)
 
     const runtime = workletsProvider.createRuntimeForThread(frameOutput.thread)
     runtime.setOnFrameCallback(frameOutput, (frame) => {
@@ -110,10 +100,10 @@ describe('VisionCamera - Coordinates', () => {
 
     await session.start()
     try {
-      await waitUntil(() => report != null || sessionError != null, {
+      await waitUntil(() => report != null || onError.mock.calls.length > 0, {
         timeout: 15_000,
       })
-      expect(sessionError).toBe(undefined)
+      expect(onError).not.toHaveBeenCalled()
       const r = report
       if (r == null) throw new Error('no report')
       for (const { input, roundTripped } of r.points) {
@@ -123,9 +113,6 @@ describe('VisionCamera - Coordinates', () => {
         expect(roundTripped.x).toBeCloseTo(input.x, 0)
         expect(roundTripped.y).toBeCloseTo(input.y, 0)
       }
-      console.log(
-        `frame ${r.width}x${r.height} round-trip points: ${JSON.stringify(r.points)}`,
-      )
     } finally {
       runtime.setOnFrameCallback(frameOutput, undefined)
       errorSub.remove()
@@ -161,10 +148,8 @@ describe('VisionCamera - Coordinates', () => {
     const onSample = (p: Point) => {
       samples.push(p)
     }
-    let sessionError: Error | undefined
-    const errorSub = session.addOnErrorListener((error) => {
-      sessionError = error
-    })
+    const onError = fn<(error: Error) => void>()
+    const errorSub = session.addOnErrorListener(onError)
 
     const runtime = workletsProvider.createRuntimeForThread(frameOutput.thread)
     runtime.setOnFrameCallback(frameOutput, (frame) => {
@@ -177,10 +162,13 @@ describe('VisionCamera - Coordinates', () => {
 
     await session.start()
     try {
-      await waitUntil(() => samples.length >= 5 || sessionError != null, {
-        timeout: 15_000,
-      })
-      expect(sessionError).toBe(undefined)
+      await waitUntil(
+        () => samples.length >= 5 || onError.mock.calls.length > 0,
+        {
+          timeout: 15_000,
+        },
+      )
+      expect(onError).not.toHaveBeenCalled()
       expect(samples.length).toBeGreaterThanOrEqual(5)
       const first = samples[0]
       if (first == null) throw new Error('no samples')
@@ -191,9 +179,6 @@ describe('VisionCamera - Coordinates', () => {
         expect(s.x).toBeCloseTo(first.x, 0)
         expect(s.y).toBeCloseTo(first.y, 0)
       }
-      console.log(
-        `frame center camera point samples: ${JSON.stringify(samples)}`,
-      )
     } finally {
       runtime.setOnFrameCallback(frameOutput, undefined)
       errorSub.remove()
@@ -223,12 +208,11 @@ describe('VisionCamera - Coordinates', () => {
     let previewRef: PreviewView | undefined
     const previewStarted = deferred()
     const layout = deferred<{ width: number; height: number }>()
-    let sessionError: Error | undefined
-    const errorSub = session.addOnErrorListener((error) => {
-      sessionError = error
+    const onError = fn((error: Error) => {
       previewStarted.reject(error)
       layout.reject(error)
     })
+    const errorSub = session.addOnErrorListener(onError)
 
     await render(
       <NativePreviewView
@@ -253,7 +237,7 @@ describe('VisionCamera - Coordinates', () => {
     try {
       await withTimeout(layout.promise, 10_000, 'preview view onLayout')
       await withTimeout(previewStarted.promise, 15_000, 'preview started')
-      expect(sessionError).toBe(undefined)
+      expect(onError).not.toHaveBeenCalled()
       if (previewRef == null) throw new Error('no preview ref')
 
       const { width: w, height: h } = await layout.promise
@@ -271,7 +255,6 @@ describe('VisionCamera - Coordinates', () => {
         expect(roundTripped.x).toBeCloseTo(input.x, 0)
         expect(roundTripped.y).toBeCloseTo(input.y, 0)
       }
-      console.log(`preview round-trip ok on ${w}x${h}`)
     } finally {
       errorSub.remove()
       await session.stop()
@@ -297,12 +280,11 @@ describe('VisionCamera - Coordinates', () => {
     let previewRef: PreviewView | undefined
     const previewStarted = deferred()
     const layout = deferred<{ width: number; height: number }>()
-    let sessionError: Error | undefined
-    const errorSub = session.addOnErrorListener((error) => {
-      sessionError = error
+    const onError = fn((error: Error) => {
       previewStarted.reject(error)
       layout.reject(error)
     })
+    const errorSub = session.addOnErrorListener(onError)
 
     await render(
       <NativePreviewView
@@ -327,7 +309,7 @@ describe('VisionCamera - Coordinates', () => {
     try {
       await withTimeout(layout.promise, 10_000, 'preview view onLayout')
       await withTimeout(previewStarted.promise, 15_000, 'preview started')
-      expect(sessionError).toBe(undefined)
+      expect(onError).not.toHaveBeenCalled()
       if (previewRef == null) throw new Error('no preview ref')
 
       const { width: w, height: h } = await layout.promise
@@ -336,9 +318,6 @@ describe('VisionCamera - Coordinates', () => {
       const back = previewRef.convertCameraPointToViewPoint(cameraPoint)
       expect(back.x).toBeCloseTo(viewCenter.x, 0)
       expect(back.y).toBeCloseTo(viewCenter.y, 0)
-      console.log(
-        `preview center round-trip: ${JSON.stringify(viewCenter)} -> ${JSON.stringify(cameraPoint)} -> ${JSON.stringify(back)}`,
-      )
     } finally {
       errorSub.remove()
       await session.stop()
@@ -364,12 +343,11 @@ describe('VisionCamera - Coordinates', () => {
     let previewRef: PreviewView | undefined
     const previewStarted = deferred()
     const layout = deferred<{ width: number; height: number }>()
-    let sessionError: Error | undefined
-    const errorSub = session.addOnErrorListener((error) => {
-      sessionError = error
+    const onError = fn((error: Error) => {
       previewStarted.reject(error)
       layout.reject(error)
     })
+    const errorSub = session.addOnErrorListener(onError)
 
     await render(
       <NativePreviewView
@@ -394,7 +372,7 @@ describe('VisionCamera - Coordinates', () => {
     try {
       await withTimeout(layout.promise, 10_000, 'preview view onLayout')
       await withTimeout(previewStarted.promise, 15_000, 'preview started')
-      expect(sessionError).toBe(undefined)
+      expect(onError).not.toHaveBeenCalled()
       if (previewRef == null) throw new Error('no preview ref')
 
       const { width: w, height: h } = await layout.promise
@@ -418,16 +396,13 @@ describe('VisionCamera - Coordinates', () => {
       // symmetric around the center. numDigits=1 tolerates |x - 0.5| < 0.05.
       expect(mp.normalizedX).toBeCloseTo(0.5, 1)
       expect(mp.normalizedY).toBeCloseTo(0.5, 1)
-      console.log(
-        `metering point at view center: relative=(${mp.relativeX}, ${mp.relativeY}) normalized=(${mp.normalizedX}, ${mp.normalizedY})`,
-      )
     } finally {
       errorSub.remove()
       await session.stop()
     }
   })
 
-  // Repro for https://github.com/mrousavy/react-native-vision-camera/issues/3871
+  // Repro for https://github.com/margelo/react-native-vision-camera/issues/3871
   it('round-trips Frame center -> Camera -> View center end-to-end', async () => {
     const session = await VisionCamera.createCameraSession(false)
     const previewOutput = VisionCamera.createPreviewOutput()
@@ -454,12 +429,11 @@ describe('VisionCamera - Coordinates', () => {
     let previewRef: PreviewView | undefined
     const previewStarted = deferred()
     const layout = deferred<{ width: number; height: number }>()
-    let sessionError: Error | undefined
-    const errorSub = session.addOnErrorListener((error) => {
-      sessionError = error
+    const onError = fn((error: Error) => {
       previewStarted.reject(error)
       layout.reject(error)
     })
+    const errorSub = session.addOnErrorListener(onError)
 
     await render(
       <NativePreviewView
@@ -481,10 +455,8 @@ describe('VisionCamera - Coordinates', () => {
     )
 
     let frameCenterCamera: Point | undefined
-    let observedOrientation: string | undefined
-    const onSample = (cameraPoint: Point, orientation: string) => {
+    const onSample = (cameraPoint: Point) => {
       frameCenterCamera = cameraPoint
-      observedOrientation = orientation
     }
 
     const runtime = workletsProvider.createRuntimeForThread(frameOutput.thread)
@@ -492,7 +464,7 @@ describe('VisionCamera - Coordinates', () => {
       'worklet'
       const center = { x: frame.width / 2, y: frame.height / 2 }
       const cameraPoint = frame.convertFramePointToCameraPoint(center)
-      scheduleOnRN(onSample, cameraPoint, frame.orientation)
+      scheduleOnRN(onSample, cameraPoint)
       frame.dispose()
     })
 
@@ -500,10 +472,11 @@ describe('VisionCamera - Coordinates', () => {
     try {
       await withTimeout(layout.promise, 10_000, 'preview view onLayout')
       await withTimeout(previewStarted.promise, 15_000, 'preview started')
-      await waitUntil(() => frameCenterCamera != null || sessionError != null, {
-        timeout: 15_000,
-      })
-      expect(sessionError).toBe(undefined)
+      await waitUntil(
+        () => frameCenterCamera != null || onError.mock.calls.length > 0,
+        { timeout: 15_000 },
+      )
+      expect(onError).not.toHaveBeenCalled()
       if (previewRef == null) throw new Error('no preview ref')
       if (frameCenterCamera == null) throw new Error('no frame center sample')
 
@@ -520,9 +493,146 @@ describe('VisionCamera - Coordinates', () => {
       // view dimension or more.
       expect(projected.x).toBeCloseTo(viewCenter.x, -2)
       expect(projected.y).toBeCloseTo(viewCenter.y, -2)
-      console.log(
-        `frame.orientation=${observedOrientation} frame-center camera=${JSON.stringify(frameCenterCamera)} -> view=${JSON.stringify(projected)} (view center ${JSON.stringify(viewCenter)})`,
+    } finally {
+      runtime.setOnFrameCallback(frameOutput, undefined)
+      errorSub.remove()
+      await session.stop()
+    }
+  })
+
+  // The end-to-end test above projects a single point, and the frame center
+  // is a fixed point of any axis-scaling error — an anisotropic Frame ->
+  // View mapping still lands the center on the center. Projecting a region
+  // catches what a point cannot: a square in Frame space must stay square
+  // in View space, because every transform between them (sensor scale,
+  // orientation, the preview's aspect-preserving crop) preserves aspect.
+  //
+  // Camera space itself is allowed to be anisotropic — iOS normalizes
+  // per-axis to [0, 1], so a square is not square there — but that is an
+  // intermediate representation, and converting out of it must undo the
+  // same per-axis scaling it applied. Composing the two public conversions
+  // is exactly how callers map a region of interest (a scan guide, a
+  // detection box) between the preview and the pixels, so the composition
+  // is the contract under test, not either half alone.
+  it('maps a square Frame region onto a square View region', async () => {
+    const session = await VisionCamera.createCameraSession(false)
+    const previewOutput = VisionCamera.createPreviewOutput()
+    const frameOutput = VisionCamera.createFrameOutput({
+      targetResolution: CommonResolutions.HD_16_9,
+      pixelFormat: 'native',
+      enablePreviewSizedOutputBuffers: false,
+      enablePhysicalBufferRotation: false,
+      enableCameraMatrixDelivery: false,
+      allowDeferredStart: false,
+      dropFramesWhileBusy: true,
+    })
+    await session.configure([
+      {
+        input: backDevice,
+        outputs: [
+          { output: previewOutput, mirrorMode: 'auto' },
+          { output: frameOutput, mirrorMode: 'auto' },
+        ],
+        constraints: [],
+      },
+    ])
+
+    let previewRef: PreviewView | undefined
+    const previewStarted = deferred()
+    const layout = deferred<{ width: number; height: number }>()
+    const onError = fn((error: Error) => {
+      previewStarted.reject(error)
+      layout.reject(error)
+    })
+    const errorSub = session.addOnErrorListener(onError)
+
+    await render(
+      <NativePreviewView
+        style={StyleSheet.absoluteFill}
+        previewOutput={previewOutput}
+        hybridRef={callback((r: PreviewView) => {
+          previewRef = r
+        })}
+        onPreviewStarted={callback(() => {
+          previewStarted.resolve()
+        })}
+        onLayout={(e: LayoutChangeEvent) => {
+          layout.resolve({
+            width: e.nativeEvent.layout.width,
+            height: e.nativeEvent.layout.height,
+          })
+        }}
+      />,
+    )
+
+    // Three corners are enough to measure two adjacent edges of the square.
+    type SquareCorners = {
+      topLeft: Point
+      topRight: Point
+      bottomLeft: Point
+    }
+    let cameraCorners: SquareCorners | undefined
+    const onCorners = (corners: SquareCorners) => {
+      cameraCorners = corners
+    }
+
+    const runtime = workletsProvider.createRuntimeForThread(frameOutput.thread)
+    runtime.setOnFrameCallback(frameOutput, (frame) => {
+      'worklet'
+      // A square centered in the frame, kept small so it stays inside the
+      // preview's `resizeMode='cover'` crop on any view aspect ratio.
+      const side = Math.min(frame.width, frame.height) / 4
+      const left = frame.width / 2 - side / 2
+      const right = frame.width / 2 + side / 2
+      const top = frame.height / 2 - side / 2
+      const bottom = frame.height / 2 + side / 2
+      scheduleOnRN(onCorners, {
+        topLeft: frame.convertFramePointToCameraPoint({ x: left, y: top }),
+        topRight: frame.convertFramePointToCameraPoint({ x: right, y: top }),
+        bottomLeft: frame.convertFramePointToCameraPoint({
+          x: left,
+          y: bottom,
+        }),
+      })
+      frame.dispose()
+    })
+
+    await session.start()
+    try {
+      await withTimeout(layout.promise, 10_000, 'preview view onLayout')
+      await withTimeout(previewStarted.promise, 15_000, 'preview started')
+      await waitUntil(
+        () => cameraCorners != null || onError.mock.calls.length > 0,
+        { timeout: 15_000 },
       )
+      expect(onError).not.toHaveBeenCalled()
+      if (previewRef == null) throw new Error('no preview ref')
+      const corners = cameraCorners
+      if (corners == null) throw new Error('no square corner samples')
+
+      const view = {
+        topLeft: previewRef.convertCameraPointToViewPoint(corners.topLeft),
+        topRight: previewRef.convertCameraPointToViewPoint(corners.topRight),
+        bottomLeft: previewRef.convertCameraPointToViewPoint(
+          corners.bottomLeft,
+        ),
+      }
+
+      // Edge *lengths*, not per-axis deltas: the orientation counter-rotation
+      // is free to map the frame's x edge onto the view's y axis, so only the
+      // distances are comparable across the two spaces.
+      const distance = (a: Point, b: Point) => Math.hypot(b.x - a.x, b.y - a.y)
+      const topEdge = distance(view.topLeft, view.topRight)
+      const leftEdge = distance(view.topLeft, view.bottomLeft)
+      expect(topEdge).toBeGreaterThan(0)
+      expect(leftEdge).toBeGreaterThan(0)
+
+      // A ratio rather than absolute lengths: the frame resolution and the
+      // view size differ per device, but a square is square everywhere.
+      // toBeCloseTo(1, 1) tolerates |ratio - 1| < 0.05, which absorbs dp /
+      // pixel rounding while still catching an axis-scaling regression.
+      const edgeRatio = leftEdge / topEdge
+      expect(edgeRatio).toBeCloseTo(1, 1)
     } finally {
       runtime.setOnFrameCallback(frameOutput, undefined)
       errorSub.remove()
@@ -534,7 +644,7 @@ describe('VisionCamera - Coordinates', () => {
   // image space, while Frame.convertFramePointToCameraPoint consumes raw
   // buffer-space points. The center-only test above cannot catch an
   // off-center rectangle drifting after orientation is applied.
-  // See https://github.com/mrousavy/react-native-vision-camera/pull/3878.
+  // See https://github.com/margelo/react-native-vision-camera/pull/3878.
   it('maps oriented Frame rectangles into the same Camera bounds', async (context) => {
     const session = await VisionCamera.createCameraSession(false)
     const frameOutput = VisionCamera.createFrameOutput({
@@ -570,10 +680,8 @@ describe('VisionCamera - Coordinates', () => {
       report = r
     }
 
-    let sessionError: Error | undefined
-    const errorSub = session.addOnErrorListener((error) => {
-      sessionError = error
-    })
+    const onError = fn<(error: Error) => void>()
+    const errorSub = session.addOnErrorListener(onError)
 
     const runtime = workletsProvider.createRuntimeForThread(frameOutput.thread)
     runtime.setOnFrameCallback(frameOutput, (frame) => {
@@ -636,10 +744,10 @@ describe('VisionCamera - Coordinates', () => {
 
     await session.start()
     try {
-      await waitUntil(() => report != null || sessionError != null, {
+      await waitUntil(() => report != null || onError.mock.calls.length > 0, {
         timeout: 15_000,
       })
-      expect(sessionError).toBe(undefined)
+      expect(onError).not.toHaveBeenCalled()
       const r = report
       if (r == null) throw new Error('no rectangle projection report')
 
@@ -652,10 +760,6 @@ describe('VisionCamera - Coordinates', () => {
       for (const edge of ['left', 'top', 'right', 'bottom'] as const) {
         expect(r.reported[edge]).toBeCloseTo(r.expected[edge], 0)
       }
-
-      console.log(
-        `oriented rectangle projection orientation=${r.orientation} expected=${JSON.stringify(r.expected)} reported=${JSON.stringify(r.reported)}`,
-      )
     } finally {
       runtime.setOnFrameCallback(frameOutput, undefined)
       errorSub.remove()

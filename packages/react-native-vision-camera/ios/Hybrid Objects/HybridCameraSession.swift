@@ -66,6 +66,8 @@ final class HybridCameraSession: HybridCameraSessionSpec {
         )
       }
 
+      // Detach all unwanted preview layers before touching inputs/outputs
+      self.detachUnwantedPreviewLayers(connections)
       // Remove all unwanted inputs and add all new inputs
       try self.updateInputs(connections)
       // Remove all unwanted outputs and add all new outputs
@@ -90,6 +92,13 @@ final class HybridCameraSession: HybridCameraSessionSpec {
       }
       self.session.automaticallyConfiguresCaptureDeviceForWideColor = !hasCustomDynamicRangeConstraint
 
+      // Haptics and System Sounds Playback
+      if let allowHapticsAndSystemSoundsPlayback = config?.allowHapticsAndSystemSoundsPlayback {
+        let audioSession = AVAudioSession.sharedInstance()
+        if audioSession.allowHapticsAndSystemSoundsDuringRecording != allowHapticsAndSystemSoundsPlayback {
+          try audioSession.setAllowHapticsAndSystemSoundsDuringRecording(allowHapticsAndSystemSoundsPlayback)
+        }
+      }
       // Background Audio Playback
       if #available(iOS 18.0, *) {
         if let allowBackgroundAudioPlayback = config?.allowBackgroundAudioPlayback {
@@ -222,6 +231,25 @@ final class HybridCameraSession: HybridCameraSessionSpec {
 
   // pragma MARK: Helpers
   /**
+   * Detach all preview layers that are not listed in the [targetConnections] array
+   * from this [AVCaptureSession].
+   * This must run before [updateInputs] or [updateOutputs], as those methods kill
+   * preview connections without unsetting the `session`.
+   */
+  private func detachUnwantedPreviewLayers(_ targetConnections: [ResolvedCameraSessionConnection]) {
+    let currentlyAttachedPreviewLayers = self.session.connections.compactMap { $0.videoPreviewLayer }
+    for currentlyAttachedPreviewLayer in currentlyAttachedPreviewLayers {
+      let containsAttachedPreviewLayer = targetConnections.contains { connection in
+        return connection.isConnectedTo(preview: currentlyAttachedPreviewLayer)
+      }
+      if !containsAttachedPreviewLayer {
+        logger.info("Removing preview \(currentlyAttachedPreviewLayer)...")
+        currentlyAttachedPreviewLayer.session = nil
+      }
+    }
+  }
+
+  /**
    * Adds all inputs on the given [targetConnections] if they haven't been added yet,
    * and removes all current inputs that aren't listed in the [connections] array.
    */
@@ -282,6 +310,7 @@ final class HybridCameraSession: HybridCameraSessionSpec {
       }
     }
   }
+
   /**
    * Adds all outputs on the given [targetConnections] if they haven't been added yet,
    * and removes all current outputs that aren't listed in the [targetConnections] array.

@@ -1,6 +1,6 @@
 {
   "name": "react-native-vision-camera-resizer",
-  "version": "5.1.1",
+  "version": "5.2.3",
   "description": "High-performance image and frame resizing plugin using Metal/Vulkan for react-native-vision-camera.",
   "main": "lib/index",
   "module": "lib/index",
@@ -57,12 +57,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/mrousavy/react-native-vision-camera.git"
+    "url": "git+https://github.com/margelo/react-native-vision-camera.git"
   },
   "author": "Marc Rousavy <me@mrousavy.com> (https://github.com/mrousavy)",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/mrousavy/react-native-vision-camera/issues"
+    "url": "https://github.com/margelo/react-native-vision-camera/issues"
   },
   "homepage": "https://visioncamera.margelo.com/api/react-native-vision-camera-resizer",
   "publishConfig": {
@@ -70,10 +70,10 @@
   },
   "devDependencies": {
     "@types/react": "19.2.15",
-    "nitrogen": "0.36.1",
+    "nitrogen": "0.37.0",
     "react": "19.2.3",
     "react-native": "0.85.3",
-    "react-native-nitro-modules": "0.36.1",
+    "react-native-nitro-modules": "0.37.0",
     "react-native-vision-camera": "*",
     "typescript": "6.0.3"
   },
@@ -82,6 +82,11 @@
     "react-native": "*",
     "react-native-nitro-modules": "*",
     "react-native-vision-camera": "*"
+  },
+  "peerDependenciesMeta": {
+    "react-native-nitro-modules": {
+      "optional": true
+    }
   },
   "release-it": {
     "npm": {

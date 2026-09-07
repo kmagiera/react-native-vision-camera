@@ -1,7 +1,9 @@
 import {
+  assert,
   beforeAll,
   describe,
   expect,
+  fn,
   it,
   waitUntil,
 } from 'react-native-harness'
@@ -28,8 +30,7 @@ describe('VisionCamera - Multi-Output', () => {
     expect(VisionCamera.microphonePermissionStatus).toBe('authorized')
     factory = await VisionCamera.createDeviceFactory()
     const back = factory.getDefaultCamera('back')
-    expect(back).toBeDefined()
-    if (back == null) throw new Error('no back camera')
+    assert.exists(back, 'no back camera')
     backDevice = back
   })
 
@@ -55,10 +56,8 @@ describe('VisionCamera - Multi-Output', () => {
       dropFramesWhileBusy: true,
     })
 
-    let sessionError: Error | undefined
-    const errorSub = session.addOnErrorListener((error) => {
-      sessionError = error
-    })
+    const onSessionError = fn<(error: Error) => void>()
+    const errorSub = session.addOnErrorListener(onSessionError)
 
     await session.configure([
       {
@@ -73,10 +72,73 @@ describe('VisionCamera - Multi-Output', () => {
     ])
     await session.start()
     try {
-      expect(sessionError).toBe(undefined)
+      expect(onSessionError).not.toHaveBeenCalled()
     } finally {
       errorSub.remove()
       await session.stop()
+    }
+  })
+
+  it('reuses removed preview, photo, and video outputs in a new session', async () => {
+    const firstSession = await VisionCamera.createCameraSession(false)
+    const secondSession = await VisionCamera.createCameraSession(false)
+    const previewOutput = VisionCamera.createPreviewOutput()
+    const photoOutput = VisionCamera.createPhotoOutput({
+      targetResolution: CommonResolutions.HD_4_3,
+      containerFormat: 'jpeg',
+      quality: 0.8,
+      qualityPrioritization: 'balanced',
+    })
+    const videoOutput = VisionCamera.createVideoOutput({
+      targetResolution: CommonResolutions.HD_16_9,
+      enableAudio: false,
+    })
+
+    try {
+      const firstControllers = await firstSession.configure([
+        {
+          input: backDevice,
+          outputs: [
+            { output: previewOutput, mirrorMode: 'auto' },
+            { output: photoOutput, mirrorMode: 'auto' },
+            { output: videoOutput, mirrorMode: 'auto' },
+          ],
+          constraints: [],
+        },
+      ])
+      expect(firstControllers).toHaveLength(1)
+
+      await firstSession.configure([])
+
+      const photoControllers = await secondSession.configure([
+        {
+          input: backDevice,
+          outputs: [{ output: photoOutput, mirrorMode: 'auto' }],
+          constraints: [],
+        },
+      ])
+      expect(photoControllers).toHaveLength(1)
+
+      const videoControllers = await secondSession.configure([
+        {
+          input: backDevice,
+          outputs: [{ output: videoOutput, mirrorMode: 'auto' }],
+          constraints: [],
+        },
+      ])
+      expect(videoControllers).toHaveLength(1)
+
+      const previewControllers = await secondSession.configure([
+        {
+          input: backDevice,
+          outputs: [{ output: previewOutput, mirrorMode: 'auto' }],
+          constraints: [],
+        },
+      ])
+      expect(previewControllers).toHaveLength(1)
+    } finally {
+      await firstSession.stop()
+      await secondSession.stop()
     }
   })
 
@@ -115,13 +177,11 @@ describe('VisionCamera - Multi-Output', () => {
     ])
 
     let framesReceived = 0
-    let sessionError: Error | undefined
     const onFrameReceived = () => {
       framesReceived++
     }
-    const errorSub = session.addOnErrorListener((error) => {
-      sessionError = error
-    })
+    const onSessionError = fn<(error: Error) => void>()
+    const errorSub = session.addOnErrorListener(onSessionError)
 
     const runtime = workletsProvider.createRuntimeForThread(frameOutput.thread)
     runtime.setOnFrameCallback(frameOutput, (frame) => {
@@ -133,10 +193,15 @@ describe('VisionCamera - Multi-Output', () => {
     await session.start()
     try {
       // Wait for the frame pipeline to start.
-      await waitUntil(() => framesReceived >= 1 || sessionError != null, {
-        timeout: 15_000,
-      })
-      expect(sessionError).toBe(undefined)
+      await waitUntil(
+        () => {
+          const error = onSessionError.mock.lastCall?.[0]
+          if (error != null) throw error
+          return framesReceived >= 1
+        },
+        { timeout: 15_000 },
+      )
+      expect(onSessionError).not.toHaveBeenCalled()
 
       // Start recording while frames are still streaming.
       const recorder = await videoOutput.createRecorder({})
@@ -156,15 +221,19 @@ describe('VisionCamera - Multi-Output', () => {
       // Frames must keep arriving after the photo capture completes —
       // photo capture must not permanently stall the frame pipeline.
       await waitUntil(
-        () => framesReceived > framesAtPhoto + 2 || sessionError != null,
+        () => {
+          const error = onSessionError.mock.lastCall?.[0]
+          if (error != null) throw error
+          return framesReceived > framesAtPhoto + 2
+        },
         { timeout: 15_000 },
       )
-      expect(sessionError).toBe(undefined)
+      expect(onSessionError).not.toHaveBeenCalled()
       expect(framesReceived).toBeGreaterThan(framesAtPhoto)
 
       await recorder.stopRecording()
       await withTimeout(finished.promise, 15_000, 'finish')
-      expect(sessionError).toBe(undefined)
+      expect(onSessionError).not.toHaveBeenCalled()
     } finally {
       runtime.setOnFrameCallback(frameOutput, undefined)
       errorSub.remove()
@@ -248,13 +317,11 @@ describe('VisionCamera - Multi-Output', () => {
     })
 
     let framesReceived = 0
-    let sessionError: Error | undefined
     const onFrameReceived = () => {
       framesReceived++
     }
-    const errorSub = session.addOnErrorListener((error) => {
-      sessionError = error
-    })
+    const onSessionError = fn<(error: Error) => void>()
+    const errorSub = session.addOnErrorListener(onSessionError)
 
     await session.configure([
       {
@@ -317,12 +384,16 @@ describe('VisionCamera - Multi-Output', () => {
       // The untouched frame output still streams.
       const framesAtCheck = framesReceived
       await waitUntil(
-        () => framesReceived > framesAtCheck + 2 || sessionError != null,
+        () => {
+          const error = onSessionError.mock.lastCall?.[0]
+          if (error != null) throw error
+          return framesReceived > framesAtCheck + 2
+        },
         { timeout: 15_000 },
       )
       expect(framesReceived).toBeGreaterThan(framesAtCheck)
 
-      expect(sessionError).toBe(undefined)
+      expect(onSessionError).not.toHaveBeenCalled()
     } finally {
       runtime.setOnFrameCallback(frameOutput, undefined)
       errorSub.remove()
@@ -353,13 +424,11 @@ describe('VisionCamera - Multi-Output', () => {
     })
 
     let framesReceived = 0
-    let sessionError: Error | undefined
     const onFrameReceived = () => {
       framesReceived++
     }
-    const errorSub = session.addOnErrorListener((error) => {
-      sessionError = error
-    })
+    const onSessionError = fn<(error: Error) => void>()
+    const errorSub = session.addOnErrorListener(onSessionError)
 
     await session.configure([
       {
@@ -420,12 +489,16 @@ describe('VisionCamera - Multi-Output', () => {
       // The untouched frame output still streams.
       const framesAtCheck = framesReceived
       await waitUntil(
-        () => framesReceived > framesAtCheck + 2 || sessionError != null,
+        () => {
+          const error = onSessionError.mock.lastCall?.[0]
+          if (error != null) throw error
+          return framesReceived > framesAtCheck + 2
+        },
         { timeout: 15_000 },
       )
       expect(framesReceived).toBeGreaterThan(framesAtCheck)
 
-      expect(sessionError).toBe(undefined)
+      expect(onSessionError).not.toHaveBeenCalled()
     } finally {
       runtime.setOnFrameCallback(frameOutput, undefined)
       errorSub.remove()
@@ -455,10 +528,8 @@ describe('VisionCamera - Multi-Output', () => {
       dropFramesWhileBusy: true,
     })
 
-    let sessionError: Error | undefined
-    const errorSub = session.addOnErrorListener((error) => {
-      sessionError = error
-    })
+    const onSessionError = fn<(error: Error) => void>()
+    const errorSub = session.addOnErrorListener(onSessionError)
 
     await session.configure([
       {
@@ -472,9 +543,9 @@ describe('VisionCamera - Multi-Output', () => {
       },
     ])
 
-    let yuvIsPlanar: boolean | undefined
+    const onYuvFrame = fn<(isPlanar: boolean) => void>()
     const reportYuv = (planar: boolean) => {
-      yuvIsPlanar = planar
+      onYuvFrame(planar)
     }
     const yuvRuntime = workletsProvider.createRuntimeForThread(
       yuvFrameOutput.thread,
@@ -488,11 +559,16 @@ describe('VisionCamera - Multi-Output', () => {
     await session.start()
 
     try {
-      await waitUntil(() => yuvIsPlanar != null || sessionError != null, {
-        timeout: 15_000,
-      })
-      expect(sessionError).toBe(undefined)
-      expect(yuvIsPlanar).toBe(true)
+      await waitUntil(
+        () => {
+          const error = onSessionError.mock.lastCall?.[0]
+          if (error != null) throw error
+          return onYuvFrame.mock.calls.length > 0
+        },
+        { timeout: 15_000 },
+      )
+      expect(onSessionError).not.toHaveBeenCalled()
+      expect(onYuvFrame).toHaveBeenLastCalledWith(true)
 
       yuvRuntime.setOnFrameCallback(yuvFrameOutput, undefined)
 
@@ -518,9 +594,9 @@ describe('VisionCamera - Multi-Output', () => {
         },
       ])
 
-      let rgbIsPlanar: boolean | undefined
+      const onRgbFrame = fn<(isPlanar: boolean) => void>()
       const reportRgb = (planar: boolean) => {
-        rgbIsPlanar = planar
+        onRgbFrame(planar)
       }
       const rgbRuntime = workletsProvider.createRuntimeForThread(
         rgbFrameOutput.thread,
@@ -532,11 +608,16 @@ describe('VisionCamera - Multi-Output', () => {
       })
 
       try {
-        await waitUntil(() => rgbIsPlanar != null || sessionError != null, {
-          timeout: 15_000,
-        })
-        expect(sessionError).toBe(undefined)
-        expect(rgbIsPlanar).toBe(false)
+        await waitUntil(
+          () => {
+            const error = onSessionError.mock.lastCall?.[0]
+            if (error != null) throw error
+            return onRgbFrame.mock.calls.length > 0
+          },
+          { timeout: 15_000 },
+        )
+        expect(onSessionError).not.toHaveBeenCalled()
+        expect(onRgbFrame).toHaveBeenLastCalledWith(false)
 
         // The untouched photo output still captures.
         const photo = await photoOutput.capturePhoto(

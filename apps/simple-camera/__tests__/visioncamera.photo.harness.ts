@@ -1,10 +1,16 @@
+import { Platform } from 'react-native'
 import {
+  assert,
   beforeAll,
   describe,
   expect,
+  fn,
   it,
+  waitFor,
   waitUntil,
 } from 'react-native-harness'
+import type { Image } from 'react-native-nitro-image'
+import { Images } from 'react-native-nitro-image'
 import type {
   CameraDevice,
   CameraDeviceFactory,
@@ -15,6 +21,7 @@ import type {
   Size,
 } from 'react-native-vision-camera'
 import { CommonResolutions, VisionCamera } from 'react-native-vision-camera'
+import { withTimeout } from './test-utils'
 
 const sleep = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms))
@@ -118,8 +125,7 @@ describe('VisionCamera - Photo', () => {
     expect(VisionCamera.cameraPermissionStatus).toBe('authorized')
     factory = await VisionCamera.createDeviceFactory()
     const back = factory.getDefaultCamera('back')
-    expect(back).toBeDefined()
-    if (back == null) throw new Error('no back camera')
+    assert.exists(back, 'no back camera')
     backDevice = back
   })
 
@@ -191,8 +197,6 @@ describe('VisionCamera - Photo', () => {
 
         const pixelBuffer = photo.getPixelBuffer()
         expect(pixelBuffer.byteLength).toBeGreaterThan(0)
-        const view = new Uint8Array(pixelBuffer)
-        expect(view[0]).toBeGreaterThanOrEqual(0)
       } finally {
         photo.dispose()
       }
@@ -238,7 +242,6 @@ describe('VisionCamera - Photo', () => {
     image.dispose()
 
     const path = await photo.saveToTemporaryFileAsync()
-    expect(path.length).toBeGreaterThan(0)
     // File paths must start with "/" and end with ".jpeg" or ".jpg".
     expect(path).toMatch(/^\/.*\.(jpeg|jpg)$/)
     photo.dispose()
@@ -286,9 +289,6 @@ describe('VisionCamera - Photo', () => {
           const savedData = await response.arrayBuffer()
           const savedOrientation = readJpegExifOrientation(savedData)
 
-          console.log(
-            `outputOrientation=${outputOrientation} photo.orientation=${photo.orientation} in-memory EXIF=${inMemoryOrientation} saved EXIF=${savedOrientation}`,
-          )
           expect(savedOrientation).toBe(inMemoryOrientation)
         } finally {
           photo.dispose()
@@ -360,7 +360,7 @@ describe('VisionCamera - Photo', () => {
         { flashMode: 'off', enableShutterSound: false },
         {},
       )
-      expect(file.filePath.length).toBeGreaterThan(0)
+      expect(file.filePath).not.toHaveLength(0)
     } finally {
       await session.stop()
     }
@@ -452,9 +452,6 @@ describe('VisionCamera - Photo', () => {
         { flashMode: 'off', enableShutterSound: false },
         {},
       )
-      console.log(
-        `target=${targetResolution.width}x${targetResolution.height} => resolved=${photo.width}x${photo.height}`,
-      )
       expect(photo.width).toBeGreaterThan(0)
       expect(photo.height).toBeGreaterThan(0)
       photo.dispose()
@@ -468,7 +465,7 @@ describe('VisionCamera - Photo', () => {
   it("captures at the device's maximum supported photo resolution", async () => {
     const supportedPhotoResolutions =
       backDevice.getSupportedResolutions('photo')
-    expect(supportedPhotoResolutions.length).toBeGreaterThan(0)
+    expect(supportedPhotoResolutions).not.toHaveLength(0)
     const maxPhotoResolution = supportedPhotoResolutions.reduce((a, b) =>
       a.width * a.height > b.width * b.height ? a : b,
     )
@@ -503,8 +500,7 @@ describe('VisionCamera - Photo', () => {
       // currentResolution must reflect the resolved output size before we
       // even take the picture.
       const reported = photoOutput.currentResolution
-      expect(reported).toBeDefined()
-      if (reported == null) throw new Error('no reported photo resolution')
+      assert.exists(reported, 'no reported photo resolution')
       const reportedShortEdge = Math.min(reported.width, reported.height)
       const reportedLongEdge = Math.max(reported.width, reported.height)
       expect(reportedShortEdge).toBe(requestedShortEdge)
@@ -527,9 +523,6 @@ describe('VisionCamera - Photo', () => {
       )
       const capturedShortEdge = Math.min(photo.width, photo.height)
       const capturedLongEdge = Math.max(photo.width, photo.height)
-      console.log(
-        `max device res=${maxPhotoResolution.width}x${maxPhotoResolution.height} reported=${reported.width}x${reported.height} captured=${photo.width}x${photo.height}`,
-      )
       expect(capturedShortEdge).toBe(requestedShortEdge)
       expect(capturedLongEdge).toBe(requestedLongEdge)
       photo.dispose()
@@ -541,7 +534,7 @@ describe('VisionCamera - Photo', () => {
   it("captures at the device's minimum supported photo resolution", async () => {
     const supportedPhotoResolutions =
       backDevice.getSupportedResolutions('photo')
-    expect(supportedPhotoResolutions.length).toBeGreaterThan(0)
+    expect(supportedPhotoResolutions).not.toHaveLength(0)
     const minPhotoResolution = supportedPhotoResolutions.reduce((a, b) =>
       a.width * a.height < b.width * b.height ? a : b,
     )
@@ -572,8 +565,7 @@ describe('VisionCamera - Photo', () => {
       )
 
       const reported = photoOutput.currentResolution
-      expect(reported).toBeDefined()
-      if (reported == null) throw new Error('no reported photo resolution')
+      assert.exists(reported, 'no reported photo resolution')
       const reportedShortEdge = Math.min(reported.width, reported.height)
       const reportedLongEdge = Math.max(reported.width, reported.height)
       expect(reportedShortEdge).toBe(requestedShortEdge)
@@ -585,9 +577,6 @@ describe('VisionCamera - Photo', () => {
       )
       const capturedShortEdge = Math.min(photo.width, photo.height)
       const capturedLongEdge = Math.max(photo.width, photo.height)
-      console.log(
-        `min device res=${minPhotoResolution.width}x${minPhotoResolution.height} reported=${reported.width}x${reported.height} captured=${photo.width}x${photo.height}`,
-      )
       expect(capturedShortEdge).toBe(requestedShortEdge)
       expect(capturedLongEdge).toBe(requestedLongEdge)
       photo.dispose()
@@ -613,47 +602,48 @@ describe('VisionCamera - Photo', () => {
     ])
     await session.start()
 
-    let willBegin = 0
-    let willCapture = 0
-    let didCapture = 0
-    let sessionError: Error | undefined
-    const errorSub = session.addOnErrorListener((error) => {
-      sessionError = error
-    })
+    const onWillBeginCapture = fn()
+    const onWillCapturePhoto = fn()
+    const onDidCapturePhoto = fn()
+    const onSessionError = fn<(error: Error) => void>()
+    const errorSub = session.addOnErrorListener(onSessionError)
 
     try {
       const photo = await photoOutput.capturePhoto(
         { flashMode: 'off', enableShutterSound: false },
         {
-          onWillBeginCapture: () => {
-            willBegin++
-          },
-          onWillCapturePhoto: () => {
-            willCapture++
-          },
-          onDidCapturePhoto: () => {
-            didCapture++
-          },
+          onWillBeginCapture,
+          onWillCapturePhoto,
+          onDidCapturePhoto,
         },
       )
-      // Wait for the callbacks to drain BEFORE we stop the session, otherwise
-      // pending callback invocations can be dropped.
-      await waitUntil(
-        () =>
-          (willBegin >= 1 && willCapture >= 1 && didCapture >= 1) ||
-          sessionError != null,
-        { timeout: 5_000 },
-      )
-      expect(sessionError).toBe(undefined)
-      photo.dispose()
+      try {
+        // Wait for the callbacks to drain BEFORE we stop the session, otherwise
+        // pending callback invocations can be dropped.
+        await waitUntil(
+          () => {
+            const error = onSessionError.mock.lastCall?.[0]
+            if (error != null) throw error
+            return (
+              onWillBeginCapture.mock.calls.length >= 1 &&
+              onWillCapturePhoto.mock.calls.length >= 1 &&
+              onDidCapturePhoto.mock.calls.length >= 1
+            )
+          },
+          { timeout: 5_000 },
+        )
+      } finally {
+        photo.dispose()
+      }
     } finally {
       errorSub.remove()
       await session.stop()
     }
 
-    expect(willBegin).toBe(1)
-    expect(willCapture).toBe(1)
-    expect(didCapture).toBe(1)
+    expect(onSessionError).not.toHaveBeenCalled()
+    expect(onWillBeginCapture).toHaveBeenCalledTimes(1)
+    expect(onWillCapturePhoto).toHaveBeenCalledTimes(1)
+    expect(onDidCapturePhoto).toHaveBeenCalledTimes(1)
   })
 
   it('delivers a preview image when previewImageTargetSize is set and the device supports it', async (context) => {
@@ -679,20 +669,26 @@ describe('VisionCamera - Photo', () => {
     ])
     await session.start()
 
-    let previewImageFired = false
-    const photo = await photoOutput.capturePhoto(
-      { flashMode: 'off', enableShutterSound: false },
-      {
-        onPreviewImageAvailable: (image) => {
-          previewImageFired = true
-          image.dispose()
-        },
-      },
-    )
-    photo.dispose()
-    await session.stop()
-
-    await waitUntil(() => previewImageFired, { timeout: 5_000 })
+    const onPreviewImageAvailable = fn((image: Image) => image.dispose())
+    try {
+      const photo = await photoOutput.capturePhoto(
+        { flashMode: 'off', enableShutterSound: false },
+        { onPreviewImageAvailable },
+      )
+      try {
+        await waitFor(
+          () => {
+            expect(onPreviewImageAvailable).toHaveBeenCalled()
+          },
+          { timeout: 5_000 },
+        )
+      } finally {
+        photo.dispose()
+      }
+    } finally {
+      await session.stop()
+    }
+    expect(onPreviewImageAvailable).toHaveBeenCalledTimes(1)
   })
 
   it('captures with each flashMode the device supports', async () => {
@@ -757,8 +753,6 @@ describe('VisionCamera - Photo', () => {
     const preparedFlashModes: FlashMode[] = ['off', 'auto']
     if (backDevice.hasFlash) {
       preparedFlashModes.push('on')
-    } else {
-      console.log('[SKIP] prepareSettings flashMode on: device has no flash')
     }
 
     const session = await VisionCamera.createCameraSession(false)
@@ -792,6 +786,51 @@ describe('VisionCamera - Photo', () => {
       expect(photo.width).toBeGreaterThan(0)
       expect(photo.height).toBeGreaterThan(0)
       photo.dispose()
+    } finally {
+      await session.stop()
+    }
+  })
+
+  it('rejects a superseded Photo settings preparation', async (context) => {
+    if (Platform.OS !== 'ios') {
+      return context.skip('Photo settings preparation cancellation: iOS only')
+    }
+
+    const session = await VisionCamera.createCameraSession(false)
+    const photoOutput = VisionCamera.createPhotoOutput({
+      targetResolution: CommonResolutions.HD_4_3,
+      containerFormat: 'jpeg',
+      quality: 0.8,
+      qualityPrioritization: 'balanced',
+    })
+    try {
+      await session.configure([
+        {
+          input: backDevice,
+          outputs: [{ output: photoOutput, mirrorMode: 'auto' }],
+          constraints: [],
+        },
+      ])
+
+      // iOS defers preparation while the session is stopped. Submitting a new
+      // request must cancel the pending request without crashing the process.
+      const firstPreparation = photoOutput.prepareSettings([{}])
+      const firstPreparationRejection = expect(
+        withTimeout(
+          firstPreparation,
+          10_000,
+          'superseded Photo settings preparation',
+        ),
+      ).rejects.toThrow('Settings preparation has been canceled!')
+      const replacementPreparation = photoOutput.prepareSettings([{}])
+
+      await session.start()
+      await firstPreparationRejection
+      await withTimeout(
+        replacementPreparation,
+        10_000,
+        'replacement Photo settings preparation',
+      )
     } finally {
       await session.stop()
     }
@@ -883,9 +922,6 @@ describe('VisionCamera - Photo', () => {
         { flashMode: 'off', enableShutterSound: false },
         {},
       )
-      console.log(
-        `mirrorMode=${mirrorMode} => photo.isMirrored=${photo.isMirrored}`,
-      )
       switch (mirrorMode) {
         case 'off':
           expect(photo.isMirrored).toBe(false)
@@ -906,8 +942,7 @@ describe('VisionCamera - Photo', () => {
 
   it('captures a Photo from the default front camera', async () => {
     const front = factory.getDefaultCamera('front')
-    expect(front).toBeDefined()
-    if (front == null) throw new Error('no front camera')
+    assert.exists(front, 'no front camera')
 
     const session = await VisionCamera.createCameraSession(false)
     const photoOutput = VisionCamera.createPhotoOutput({
@@ -958,14 +993,57 @@ describe('VisionCamera - Photo', () => {
       { flashMode: 'off', enableShutterSound: false },
       {},
     )
-    expect(file1.filePath.length).toBeGreaterThan(0)
-    expect(file2.filePath.length).toBeGreaterThan(0)
     // File paths must start with "/" and end with ".jpeg" or ".jpg".
     expect(file1.filePath).toMatch(/^\/.*\.(jpeg|jpg)$/)
     expect(file2.filePath).toMatch(/^\/.*\.(jpeg|jpg)$/)
     expect(file1.filePath).not.toBe(file2.filePath)
 
     await session.stop()
+  })
+
+  it('returns captured Photo metadata from capturePhotoToFile', async () => {
+    const session = await VisionCamera.createCameraSession(false)
+    const photoOutput = VisionCamera.createPhotoOutput({
+      targetResolution: CommonResolutions.HD_4_3,
+      containerFormat: 'jpeg',
+      quality: 0.8,
+      qualityPrioritization: 'balanced',
+    })
+    await session.configure([
+      {
+        input: backDevice,
+        outputs: [{ output: photoOutput, mirrorMode: 'on' }],
+        constraints: [],
+      },
+    ])
+    await session.start()
+
+    try {
+      photoOutput.outputOrientation = 'left'
+      const inMemoryPhoto = await photoOutput.capturePhoto(
+        { flashMode: 'off', enableShutterSound: false },
+        {},
+      )
+      try {
+        const photoFile = await photoOutput.capturePhotoToFile(
+          { flashMode: 'off', enableShutterSound: false },
+          {},
+        )
+
+        expect(photoFile.filePath).toMatch(/^\/.*\.(jpeg|jpg)$/)
+        expect(photoFile.width).toBe(inMemoryPhoto.width)
+        expect(photoFile.height).toBe(inMemoryPhoto.height)
+        expect(photoFile.orientation).toBe(inMemoryPhoto.orientation)
+        expect(photoFile.isMirrored).toBe(inMemoryPhoto.isMirrored)
+        expect(photoFile.timestamp).toBeGreaterThan(0)
+        expect(photoFile.isRawPhoto).toBe(inMemoryPhoto.isRawPhoto)
+        expect(photoFile.containerFormat).toBe(inMemoryPhoto.containerFormat)
+      } finally {
+        inMemoryPhoto.dispose()
+      }
+    } finally {
+      await session.stop()
+    }
   })
 
   it('reports supportsDepthDataDelivery on a depth-capable device', async (context) => {
@@ -1000,10 +1078,129 @@ describe('VisionCamera - Photo', () => {
       },
     ])
     try {
-      console.log(
-        `photoOutput support flags: depthData=${photoOutput.supportsDepthDataDelivery} calibrationData=${photoOutput.supportsCameraCalibrationDataDelivery}`,
-      )
       expect(photoOutput.supportsDepthDataDelivery).toBe(true)
+    } finally {
+      await session.stop()
+    }
+  })
+
+  it('renders toImage() the same way the reported orientation describes', async (context) => {
+    // Regression: `HybridPhoto.toImage()` composed the mirror with `preScale` and
+    // the rotation with `postRotate`, which applies the mirror first. A reflection
+    // conjugates a rotation into its inverse, so the two orderings differ by twice
+    // the rotation - a half turn at a quarter-turn orientation. At `up` and `down`
+    // both orderings are the same matrix, so only quarter turns expose it.
+    const frontDevice = factory.getDefaultCamera('front')
+    assert.exists(frontDevice, 'no front camera')
+
+    const session = await VisionCamera.createCameraSession(false)
+    const photoOutput = VisionCamera.createPhotoOutput({
+      targetResolution: CommonResolutions.HD_4_3,
+      containerFormat: 'jpeg',
+      quality: 1,
+      qualityPrioritization: 'balanced',
+    })
+    await session.configure([
+      {
+        input: frontDevice,
+        outputs: [{ output: photoOutput, mirrorMode: 'auto' }],
+        constraints: [],
+      },
+    ])
+    await session.start()
+
+    try {
+      // Taken as the pipeline reports it. Forcing `outputOrientation` does not help:
+      // CameraX then rotates the pixels itself and reports no rotation at all.
+      const photo = await photoOutput.capturePhoto(
+        { flashMode: 'off', enableShutterSound: false },
+        {},
+      )
+      try {
+        const quarterTurns = { left: 90, right: 270 } as const
+        const rotation =
+          quarterTurns[photo.orientation as keyof typeof quarterTurns]
+        if (rotation == null) {
+          return context.skip(
+            `photo.orientation is "${photo.orientation}": this device does not report a quarter turn, so the mirror and rotation never compose`,
+          )
+        }
+        if (!photo.isMirrored) {
+          return context.skip(
+            'photo.isMirrored is false: without a mirror both orderings are the same matrix',
+          )
+        }
+
+        const storedPath = await photo.saveToTemporaryFileAsync()
+        const storedImage = await Images.loadFromFileAsync(storedPath)
+        const renderedImage = await photo.toImageAsync()
+        try {
+          const stored = await storedImage.toRawPixelDataAsync(false)
+          const rendered = await renderedImage.toRawPixelDataAsync(false)
+          if (
+            stored.width !== rendered.height ||
+            stored.height !== rendered.width
+          ) {
+            return context.skip(
+              `stored ${stored.width}x${stored.height} against rendered ${rendered.width}x${rendered.height}: this platform's decoder already applied the orientation, so the two cannot be compared point by point`,
+            )
+          }
+
+          const readChannelAverage = (
+            pixels: typeof stored,
+            x: number,
+            y: number,
+          ) => {
+            const bytes = new Uint8Array(pixels.buffer)
+            const bytesPerPixel = Math.floor(
+              bytes.length / (pixels.width * pixels.height),
+            )
+            const offset = (y * pixels.width + x) * bytesPerPixel
+            let sum = 0
+            for (let channel = 0; channel < 3; channel++) {
+              sum += bytes[offset + channel] ?? 0
+            }
+            return sum / 3
+          }
+
+          // Where a rendered point came from in the stored frame, if the rotation
+          // the Photo reports is applied first and the mirror after it.
+          const toStoredPoint = (x: number, y: number): [number, number] => {
+            const mirroredX = rendered.width - 1 - x
+            return rotation === 90
+              ? [y, stored.height - 1 - mirroredX]
+              : [stored.width - 1 - y, mirroredX]
+          }
+
+          const steps = 16
+          let totalDifference = 0
+          let samples = 0
+          for (let row = 1; row < steps; row++) {
+            for (let column = 1; column < steps; column++) {
+              const x = Math.floor((column * rendered.width) / steps)
+              const y = Math.floor((row * rendered.height) / steps)
+              const [storedX, storedY] = toStoredPoint(x, y)
+              totalDifference += Math.abs(
+                readChannelAverage(rendered, x, y) -
+                  readChannelAverage(stored, storedX, storedY),
+              )
+              samples++
+            }
+          }
+
+          // Both images decode the same JPEG, so the rendering the Photo describes
+          // is pixel identical to the stored frame read through it - the scene in
+          // front of the camera does not matter. Composing the other way round
+          // lands a half turn off, on unrelated pixels.
+          const meanDifference = totalDifference / samples
+          expect(meanDifference).toBeCloseTo(0, 0)
+        } finally {
+          storedImage.dispose()
+          renderedImage.dispose()
+        }
+      } finally {
+        photo.dispose()
+      }
     } finally {
       await session.stop()
     }

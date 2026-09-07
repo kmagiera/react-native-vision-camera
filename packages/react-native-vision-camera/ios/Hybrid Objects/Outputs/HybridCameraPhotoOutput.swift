@@ -180,16 +180,34 @@ final class HybridCameraPhotoOutput: HybridCameraPhotoOutputSpec, NativeCameraOu
         .await()
       let filePath = try await photo.saveToTemporaryFileAsync()
         .await()
-      return PhotoFile(filePath: filePath)
+      return PhotoFile(
+        filePath: filePath,
+        width: photo.width,
+        height: photo.height,
+        orientation: photo.orientation,
+        isMirrored: photo.isMirrored,
+        timestamp: photo.timestamp,
+        isRawPhoto: photo.isRawPhoto,
+        containerFormat: photo.containerFormat)
     }
   }
 
   func prepareSettings(settings: [CapturePhotoSettings]) throws -> Promise<Void> {
-    return Promise.async {
-      let captureSettings = try settings.map {
-        try $0.toAVCapturePhotoSettings(for: self.output, withOptions: self.options)
-      }
-      try await self.output.setPreparedPhotoSettingsArray(captureSettings)
+    let promise = Promise<Void>()
+    let captureSettings = try settings.map {
+      try $0.toAVCapturePhotoSettings(for: self.output, withOptions: self.options)
     }
+    self.output.setPreparedPhotoSettingsArray(captureSettings) { prepared, error in
+      if let error {
+        promise.reject(withError: error)
+      } else {
+        if prepared {
+          promise.resolve()
+        } else {
+          promise.reject(withError: RuntimeError("Settings preparation has been canceled!"))
+        }
+      }
+    }
+    return promise
   }
 }

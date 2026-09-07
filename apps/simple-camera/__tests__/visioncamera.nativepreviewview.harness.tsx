@@ -1,3 +1,4 @@
+import { screen, userEvent } from '@react-native-harness/ui'
 import {
   type LayoutChangeEvent,
   PixelRatio,
@@ -6,11 +7,11 @@ import {
   View,
 } from 'react-native'
 import {
-  afterEach,
+  assert,
   beforeAll,
-  cleanup,
   describe,
   expect,
+  fn,
   it,
   render,
 } from 'react-native-harness'
@@ -71,13 +72,8 @@ describe('VisionCamera - NativePreviewView', () => {
     expect(VisionCamera.cameraPermissionStatus).toBe('authorized')
     factory = await VisionCamera.createDeviceFactory()
     const back = factory.getDefaultCamera('back')
-    expect(back).toBeDefined()
-    if (back == null) throw new Error('no back camera')
+    assert.exists(back, 'no back camera')
     backDevice = back
-  })
-
-  afterEach(() => {
-    cleanup()
   })
 
   it('starts a bare NativePreviewView and exposes ref methods', async () => {
@@ -219,6 +215,119 @@ describe('VisionCamera - NativePreviewView', () => {
     }
   })
 
+  it('keeps a positioned NativePreviewView at its React layout after preview starts', async () => {
+    const session = await VisionCamera.createCameraSession(false)
+    const previewOutput = VisionCamera.createPreviewOutput()
+    await session.configure([
+      {
+        input: backDevice,
+        outputs: [{ output: previewOutput, mirrorMode: 'auto' }],
+        constraints: [],
+      },
+    ])
+
+    const previewRef = deferred<PreviewView>()
+    const rootLayout = deferred<Layout>()
+    const previewLayout = deferred<Layout>()
+    const previewStarted = deferred()
+    const errorSub = session.addOnErrorListener((error) => {
+      previewRef.reject(error)
+      rootLayout.reject(error)
+      previewLayout.reject(error)
+      previewStarted.reject(error)
+    })
+    const pressedPoints: Point[] = []
+
+    try {
+      await render(
+        <View
+          testID={POSITIONED_ROOT_TEST_ID}
+          style={styles.positionedRoot}
+          onLayout={(event) => {
+            rootLayout.resolve(toLayout(event))
+          }}
+          onStartShouldSetResponderCapture={() => true}
+          onResponderRelease={(event) => {
+            pressedPoints.push({
+              x: event.nativeEvent.pageX,
+              y: event.nativeEvent.pageY,
+            })
+          }}
+        >
+          <NativePreviewView
+            testID={POSITIONED_PREVIEW_TEST_ID}
+            style={styles.positionedPreview}
+            hybridRef={callback((preview: PreviewView) => {
+              previewRef.resolve(preview)
+            })}
+            onLayout={(event) => {
+              previewLayout.resolve(toLayout(event))
+            }}
+            onPreviewStarted={callback(previewStarted.resolve)}
+          />
+        </View>,
+      )
+
+      const preview = await withTimeout(
+        previewRef.promise,
+        10_000,
+        'positioned NativePreviewView hybridRef',
+      )
+      const rootFrame = await withTimeout(
+        rootLayout.promise,
+        10_000,
+        'positioned root onLayout',
+      )
+      const previewFrame = await withTimeout(
+        previewLayout.promise,
+        10_000,
+        'positioned NativePreviewView onLayout',
+      )
+
+      // Connect only after the initial native layout so attaching the native
+      // preview cannot race with a later React layout transaction.
+      preview.previewOutput = previewOutput
+      await session.start()
+      await withTimeout(
+        previewStarted.promise,
+        15_000,
+        'positioned NativePreviewView onPreviewStarted',
+      )
+
+      // Harness element references are intentionally opaque. userEvent.press
+      // taps each element's real native center, so the delta between these two
+      // public touch events reveals the preview's actual native offset while
+      // cancelling out the root's unknown screen origin.
+      const rootElement = await screen.findByTestId(POSITIONED_ROOT_TEST_ID)
+      const previewElement = await screen.findByTestId(
+        POSITIONED_PREVIEW_TEST_ID,
+      )
+      await userEvent.press(rootElement)
+      await userEvent.press(previewElement)
+
+      expect(pressedPoints).toHaveLength(2)
+      const rootCenter = pressedPoints[0]
+      const previewCenter = pressedPoints[1]
+      if (rootCenter == null || previewCenter == null) {
+        throw new Error('positioned preview touches were not received')
+      }
+
+      const actualLeft =
+        previewCenter.x -
+        rootCenter.x +
+        (rootFrame.width - previewFrame.width) / 2
+      const actualTop =
+        previewCenter.y -
+        rootCenter.y +
+        (rootFrame.height - previewFrame.height) / 2
+      expect(actualLeft).toBeCloseTo(POSITIONED_PREVIEW_LEFT, 0)
+      expect(actualTop).toBeCloseTo(POSITIONED_PREVIEW_TOP, 0)
+    } finally {
+      errorSub.remove()
+      await session.stop()
+    }
+  })
+
   it('keeps a flex preview laid out inside a padded overflow-hidden parent', async () => {
     const session = await VisionCamera.createCameraSession(false)
     const previewOutput = VisionCamera.createPreviewOutput()
@@ -304,15 +413,17 @@ describe('VisionCamera - NativePreviewView', () => {
         layout.reject(error)
         previewStarted.reject(error)
       })
+      let unmount: (() => void) | undefined
 
       try {
-        const { rerender } = await render(
+        const renderResult = await render(
           <View style={styles.issuePaddedContainer}>
             <View style={styles.placeholder} />
           </View>,
         )
+        unmount = renderResult.unmount
 
-        await rerender(
+        await renderResult.rerender(
           <View style={styles.issuePaddedContainer}>
             <NativePreviewView
               style={styles.issueFlexPreview}
@@ -352,7 +463,7 @@ describe('VisionCamera - NativePreviewView', () => {
       } finally {
         errorSub.remove()
         await session.stop()
-        cleanup()
+        unmount?.()
       }
     }
   })
@@ -566,9 +677,10 @@ describe('VisionCamera - NativePreviewView', () => {
         layout.reject(error)
         previewStarted.reject(error)
       })
+      let unmount: (() => void) | undefined
 
       try {
-        await render(
+        const renderResult = await render(
           <NativePreviewView
             style={StyleSheet.absoluteFill}
             previewOutput={previewOutput}
@@ -581,6 +693,7 @@ describe('VisionCamera - NativePreviewView', () => {
             onPreviewStarted={callback(previewStarted.resolve)}
           />,
         )
+        unmount = renderResult.unmount
 
         const preview = await withTimeout(
           previewRef.promise,
@@ -601,16 +714,15 @@ describe('VisionCamera - NativePreviewView', () => {
         )
 
         expectPreviewGeometry(preview, previewLayout)
-        cleanup()
       } finally {
+        unmount?.()
         errorSub.remove()
         await session.stop()
-        cleanup()
       }
     }
   })
 
-  it('switches a running session between two mounted NativePreviewViews', async () => {
+  it('starts a replacement preview and stops the removed preview while running', async () => {
     const session = await VisionCamera.createCameraSession(false)
     const firstPreviewOutput = VisionCamera.createPreviewOutput()
     const secondPreviewOutput = VisionCamera.createPreviewOutput()
@@ -627,13 +739,18 @@ describe('VisionCamera - NativePreviewView', () => {
     const firstLayout = deferred<Layout>()
     const secondLayout = deferred<Layout>()
     const firstPreviewStarted = deferred()
+    const firstPreviewStopped = deferred()
     const secondPreviewStarted = deferred()
+    const onFirstPreviewStarted = fn(() => firstPreviewStarted.resolve())
+    const onFirstPreviewStopped = fn(() => firstPreviewStopped.resolve())
+    const onSecondPreviewStarted = fn(() => secondPreviewStarted.resolve())
     const errorSub = session.addOnErrorListener((error) => {
       firstRef.reject(error)
       secondRef.reject(error)
       firstLayout.reject(error)
       secondLayout.reject(error)
       firstPreviewStarted.reject(error)
+      firstPreviewStopped.reject(error)
       secondPreviewStarted.reject(error)
     })
 
@@ -649,7 +766,8 @@ describe('VisionCamera - NativePreviewView', () => {
             onLayout={(event) => {
               firstLayout.resolve(toLayout(event))
             }}
-            onPreviewStarted={callback(firstPreviewStarted.resolve)}
+            onPreviewStarted={callback(onFirstPreviewStarted)}
+            onPreviewStopped={callback(onFirstPreviewStopped)}
           />
           <NativePreviewView
             style={styles.switchPreview}
@@ -660,7 +778,7 @@ describe('VisionCamera - NativePreviewView', () => {
             onLayout={(event) => {
               secondLayout.resolve(toLayout(event))
             }}
-            onPreviewStarted={callback(secondPreviewStarted.resolve)}
+            onPreviewStarted={callback(onSecondPreviewStarted)}
           />
         </View>,
       )
@@ -692,6 +810,9 @@ describe('VisionCamera - NativePreviewView', () => {
         15_000,
         'first NativePreviewView onPreviewStarted',
       )
+      expect(onFirstPreviewStarted).toHaveBeenCalledOnce()
+      expect(onFirstPreviewStopped).not.toHaveBeenCalled()
+      expect(onSecondPreviewStarted).not.toHaveBeenCalled()
       expectPreviewGeometry(firstPreview, firstPreviewLayout)
 
       await session.configure([
@@ -706,6 +827,13 @@ describe('VisionCamera - NativePreviewView', () => {
         15_000,
         'second NativePreviewView onPreviewStarted',
       )
+      await withTimeout(
+        firstPreviewStopped.promise,
+        10_000,
+        'first NativePreviewView onPreviewStopped',
+      )
+      expect(onSecondPreviewStarted).toHaveBeenCalledOnce()
+      expect(onFirstPreviewStopped).toHaveBeenCalledOnce()
       expectPreviewGeometry(secondPreview, secondPreviewLayout)
     } finally {
       errorSub.remove()
@@ -927,9 +1055,10 @@ describe('VisionCamera - NativePreviewView', () => {
         layout.reject(error)
         previewStarted.reject(error)
       })
+      let unmount: (() => void) | undefined
 
       try {
-        await render(
+        const renderResult = await render(
           <View style={styles.centeredRoot}>
             <View style={styles.fixedPreviewWrapper}>
               <NativePreviewView
@@ -947,6 +1076,7 @@ describe('VisionCamera - NativePreviewView', () => {
             </View>
           </View>,
         )
+        unmount = renderResult.unmount
 
         const preview = await withTimeout(
           previewRef.promise,
@@ -973,7 +1103,7 @@ describe('VisionCamera - NativePreviewView', () => {
       } finally {
         errorSub.remove()
         await session.stop()
-        cleanup()
+        unmount?.()
       }
     }
 
@@ -1020,9 +1150,10 @@ describe('VisionCamera - NativePreviewView', () => {
         layout.reject(error)
         previewStarted.reject(error)
       })
+      let unmount: (() => void) | undefined
 
       try {
-        await render(
+        const renderResult = await render(
           <NativePreviewView
             style={StyleSheet.absoluteFill}
             previewOutput={previewOutput}
@@ -1036,6 +1167,7 @@ describe('VisionCamera - NativePreviewView', () => {
             onPreviewStarted={callback(previewStarted.resolve)}
           />,
         )
+        unmount = renderResult.unmount
 
         const preview = await withTimeout(
           previewRef.promise,
@@ -1059,7 +1191,7 @@ describe('VisionCamera - NativePreviewView', () => {
       } finally {
         errorSub.remove()
         await session.stop()
-        cleanup()
+        unmount?.()
       }
     }
   })
@@ -1079,6 +1211,8 @@ describe('VisionCamera - NativePreviewView', () => {
     const layout = deferred<Layout>()
     const previewStarted = deferred()
     const previewStopped = deferred()
+    const onPreviewStarted = fn(() => previewStarted.resolve())
+    const onPreviewStopped = fn(() => previewStopped.resolve())
     const errorSub = session.addOnErrorListener((error) => {
       previewRef.reject(error)
       layout.reject(error)
@@ -1097,8 +1231,8 @@ describe('VisionCamera - NativePreviewView', () => {
           onLayout={(event) => {
             layout.resolve(toLayout(event))
           }}
-          onPreviewStarted={callback(previewStarted.resolve)}
-          onPreviewStopped={callback(previewStopped.resolve)}
+          onPreviewStarted={callback(onPreviewStarted)}
+          onPreviewStopped={callback(onPreviewStopped)}
         />,
       )
 
@@ -1119,6 +1253,7 @@ describe('VisionCamera - NativePreviewView', () => {
         15_000,
         'callback NativePreviewView onPreviewStarted',
       )
+      expect(onPreviewStarted).toHaveBeenCalledOnce()
 
       await session.stop()
       await withTimeout(
@@ -1126,6 +1261,7 @@ describe('VisionCamera - NativePreviewView', () => {
         10_000,
         'callback NativePreviewView onPreviewStopped',
       )
+      expect(onPreviewStopped).toHaveBeenCalledOnce()
     } finally {
       errorSub.remove()
       await session.stop()
@@ -1134,12 +1270,30 @@ describe('VisionCamera - NativePreviewView', () => {
 })
 
 const PADDING_TOP = 82
+const POSITIONED_ROOT_TEST_ID = 'positioned-preview-root'
+const POSITIONED_PREVIEW_TEST_ID = 'positioned-preview'
+const POSITIONED_PREVIEW_LEFT = 37
+const POSITIONED_PREVIEW_TOP = 83
+const POSITIONED_PREVIEW_WIDTH = 160
+const POSITIONED_PREVIEW_HEIGHT = 240
 const FIXED_PREVIEW_WIDTH = 150
 const FIXED_PREVIEW_HEIGHT = 300
 const WIDE_PREVIEW_WIDTH = 260
 const WIDE_PREVIEW_HEIGHT = 180
 
 const styles = StyleSheet.create({
+  positionedRoot: {
+    flex: 1,
+    backgroundColor: 'black',
+  },
+  positionedPreview: {
+    position: 'absolute',
+    left: POSITIONED_PREVIEW_LEFT,
+    top: POSITIONED_PREVIEW_TOP,
+    width: POSITIONED_PREVIEW_WIDTH,
+    height: POSITIONED_PREVIEW_HEIGHT,
+    backgroundColor: 'black',
+  },
   centeredRoot: {
     flex: 1,
     alignItems: 'center',

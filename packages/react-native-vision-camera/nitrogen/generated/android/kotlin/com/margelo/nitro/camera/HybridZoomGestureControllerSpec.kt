@@ -10,6 +10,7 @@ package com.margelo.nitro.camera
 import androidx.annotation.Keep
 import com.facebook.jni.HybridData
 import com.facebook.proguard.annotations.DoNotStrip
+import dalvik.annotation.optimization.FastNative
 import com.margelo.nitro.core.HybridObject
 
 /**
@@ -28,7 +29,14 @@ abstract class HybridZoomGestureControllerSpec: HybridGestureControllerSpec() {
   
 
   // Methods
+  abstract fun addOnZoomChangedListener(onZoomChanged: (zoom: Double) -> Unit): ListenerSubscription
   
+  @DoNotStrip
+  @Keep
+  private fun addOnZoomChangedListener_cxx(onZoomChanged: Func_void_double): ListenerSubscription {
+    val __result = addOnZoomChangedListener(onZoomChanged)
+    return __result
+  }
 
   // Default implementation of `HybridObject.toString()`
   override fun toString(): String {
@@ -40,6 +48,7 @@ abstract class HybridZoomGestureControllerSpec: HybridGestureControllerSpec() {
   @Keep
   protected open class CxxPart(javaPart: HybridZoomGestureControllerSpec): HybridGestureControllerSpec.CxxPart(javaPart) {
     // C++ JHybridZoomGestureControllerSpec::CxxPart::initHybrid(...)
+    @FastNative
     external override fun initHybrid(): HybridData
   }
   override fun createCxxPart(): CxxPart {
