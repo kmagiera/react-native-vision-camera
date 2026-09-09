@@ -57,6 +57,7 @@ async function streamFrameSize(
         frame.dispose()
       }}
     />,
+    { timeout: 10_000 },
   )
 
   try {
