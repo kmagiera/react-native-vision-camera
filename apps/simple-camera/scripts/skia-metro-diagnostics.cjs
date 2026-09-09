@@ -65,7 +65,16 @@ async function initializeMetro(context) {
 exports.plugin = {
   name: 'skia-ci-diagnostics',
   hooks: {
-    runtime: { ready: hook, disconnected: hook },
+    runtime: {
+      ready: hook,
+      disconnected: (context) =>
+        log(context.meta.hook, { reason: context.reason }),
+    },
+    app: {
+      started: appHook,
+      exited: appHook,
+      possibleCrash: appHook,
+    },
     metro: {
       initialized: initializeMetro,
       bundleStarted: hook,
@@ -76,6 +85,17 @@ exports.plugin = {
     collection: { started: hook, finished: hook },
     test: { started: hook, finished: hook },
   },
+}
+
+function appHook(context) {
+  const { pid, source, line, isConfirmed, crashDetails } = context
+  log(context.meta.hook, {
+    appPid: pid,
+    source,
+    line,
+    isConfirmed,
+    crashDetails,
+  })
 }
 
 exports.enhanceMiddleware = (middleware) => {

@@ -228,6 +228,54 @@ function startTestRecording() {
   )
 }
 
+async function collectPostmortem() {
+  // Read persisted logs only AFTER Harness and our observers have stopped.
+  // This cannot compete with mounting or processing the first Skia frame.
+  trace('postmortem:begin')
+  if (udid) {
+    const predicate =
+      'process == "SimpleCamera" OR ' +
+      '((process == "ReportCrash" OR process == "runningboardd" OR process == "SpringBoard") AND ' +
+      '(eventMessage CONTAINS "SimpleCamera" OR eventMessage CONTAINS "com.margelo.nitro.camera.example.simple"))'
+    const args = [
+      'show', '--last', '3m', '--style', 'compact', '--info', '--predicate', predicate,
+    ]
+    await Promise.all([
+      command('/usr/bin/log', args, 'postmortem-host.log', 30_000),
+      command(
+        'xcrun',
+        ['simctl', 'spawn', udid, 'log', ...args],
+        'postmortem-simulator.log',
+        30_000,
+      ),
+    ])
+  }
+
+  // A bridge disconnect can beat ReportCrash. Previously we looked just once
+  // during cleanup and lost reports which appeared a little later.
+  const crashDirectory = path.join(homedir(), 'Library/Logs/DiagnosticReports')
+  const copied = new Set()
+  const deadline = Date.now() + (exitCode === 0 ? 0 : 45_000)
+  do {
+    for (const name of await readdir(crashDirectory).catch(() => [])) {
+      if (!/^(SimpleCamera|SimCam|HarnessXCTestAgent).+\.(ips|crash)$/.test(name))
+        continue
+      if (copied.has(name)) continue
+      const file = path.join(crashDirectory, name)
+      const info = await stat(file)
+      if (info.isFile() && info.mtimeMs >= startedAt) {
+        await copyFile(file, path.join(artifacts, name))
+        copied.add(name)
+        trace('postmortem:crash-report', { name })
+      }
+    }
+    if ([...copied].some((name) => name.startsWith('SimpleCamera'))) break
+    if (Date.now() >= deadline) break
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+  } while (Date.now() <= deadline)
+  trace('postmortem:end', { reports: [...copied] })
+}
+
 process.once('SIGTERM', stopChildren)
 process.once('SIGINT', stopChildren)
 
@@ -394,14 +442,9 @@ try {
   clearTimeout(cleanupDeadline)
   server.closeAllConnections()
   await new Promise((resolve) => server.close(resolve))
-  const crashDirectory = path.join(homedir(), 'Library/Logs/DiagnosticReports')
-  for (const name of await readdir(crashDirectory).catch(() => [])) {
-    if (!/^(SimpleCamera|SimCam|HarnessXCTestAgent)/.test(name)) continue
-    const file = path.join(crashDirectory, name)
-    const info = await stat(file)
-    if (info.isFile() && info.mtimeMs >= startedAt)
-      await copyFile(file, path.join(artifacts, name))
-  }
+  await collectPostmortem().catch((error) =>
+    trace('postmortem:error', { error: String(error) }),
+  )
   trace('diagnostics-complete', { exitCode })
 }
 process.exitCode = exitCode
