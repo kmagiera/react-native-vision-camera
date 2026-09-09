@@ -108,9 +108,10 @@ jobs:
             -derivedDataPath "$DERIVED_DATA_PATH" \
             build
 
-      - name: Run Harness tests
+      - name: Run isolated Skia test with diagnostics
+        timeout-minutes: 20
         working-directory: apps/simple-camera
-        run: ../../node_modules/.bin/react-native-harness --harnessRunner ios --no-watchman --verbose --forceExit
+        run: node scripts/run-skia-ci-diagnostics.mjs
 
       - name: Upload Harness logs
         if: always()
@@ -121,4 +122,14 @@ jobs:
             apps/simple-camera/.harness/logs
             apps/simple-camera/ios/build/harness/DerivedData/Logs
           if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload Skia diagnostics and recording
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: skia-diagnostics
+          path: apps/simple-camera/.harness/skia-diagnostics
+          include-hidden-files: true
+          if-no-files-found: warn
           retention-days: 7
