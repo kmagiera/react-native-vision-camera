@@ -9,6 +9,15 @@ concurrency:
 
 on:
   workflow_dispatch:
+    inputs:
+      variant:
+        description: Simulator architecture and native barcode linkage
+        type: choice
+        default: x86_64
+        options:
+          - x86_64
+          - x86_64-no-barcode
+          - arm64-no-barcode
   push:
     branches:
       - main
@@ -48,12 +57,14 @@ env:
   HARNESS_IOS_METRO_HOST: 127.0.0.1
   HARNESS_METRO_BIND_HOST: 127.0.0.1
   HARNESS_SIMCAM: "1"
+  HARNESS_IOS_ARCH: ${{ inputs.variant == 'arm64-no-barcode' && 'arm64' || 'x86_64' }}
+  HARNESS_DISABLE_BARCODE: ${{ contains(inputs.variant, 'no-barcode') && '1' || '0' }}
   SIMCAM_SOURCE_IMAGE: apps/simple-camera/src/assets/simcam-harness-source.png
   DERIVED_DATA_PATH: build/harness/DerivedData
 
 jobs:
   test-ios-simcam:
-    name: Test iOS Simulator With SimCam
+    name: Test iOS Simulator With SimCam (${{ inputs.variant || 'x86_64' }})
     runs-on: macos-26
     timeout-minutes: 90
     steps:
@@ -114,7 +125,17 @@ jobs:
         working-directory: apps/simple-camera
         env:
           HERMES_ENGINE_TARBALL_PATH: ${{ steps.hermes.outputs.tarball }}
-        run: bundle exec pod install --project-directory=ios
+        run: |
+          set -euo pipefail
+          bundle exec pod install --project-directory=ios
+          if [ "$HARNESS_DISABLE_BARCODE" = "1" ]; then
+            ruby -ryaml -e '
+              pods = YAML.load_file("ios/Podfile.lock").fetch("PODS").map { |pod| pod.is_a?(Hash) ? pod.keys.first : pod }
+              unexpected = pods.grep(/\A(?:VisionCameraBarcodeScanner|GoogleMLKit|MLKit)/)
+              abort "Barcode/MLKit must be absent in this variant: #{unexpected.join(", ")}" unless unexpected.empty?
+              puts "Verified: native barcode and MLKit are not linked."
+            '
+          fi
 
       - name: Configure SimCam
         env:
@@ -134,7 +155,12 @@ jobs:
             -configuration Debug \
             -destination "generic/platform=iOS Simulator" \
             -derivedDataPath "$DERIVED_DATA_PATH" \
+            ARCHS="$HARNESS_IOS_ARCH" \
             build
+          app_binary="$DERIVED_DATA_PATH/Build/Products/Debug-iphonesimulator/SimpleCamera.app/SimpleCamera"
+          actual_arch="$(lipo -archs "$app_binary")"
+          echo "Built simulator architecture: $actual_arch (expected $HARNESS_IOS_ARCH)"
+          test "$actual_arch" = "$HARNESS_IOS_ARCH"
 
       - name: Run isolated Skia test with diagnostics
         timeout-minutes: 40
