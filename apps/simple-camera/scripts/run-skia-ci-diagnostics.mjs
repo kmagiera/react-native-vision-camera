@@ -241,7 +241,12 @@ async function collectPostmortem() {
       'show', '--last', '3m', '--style', 'compact', '--info', '--predicate', predicate,
     ]
     await Promise.all([
-      command('/usr/bin/log', args, 'postmortem-host.log', 30_000),
+      command(
+        '/usr/bin/log',
+        [...args.slice(0, -1), `process == "ReportCrash" OR (${predicate})`],
+        'postmortem-host.log',
+        30_000,
+      ),
       command(
         'xcrun',
         ['simctl', 'spawn', udid, 'log', ...args],
@@ -253,23 +258,29 @@ async function collectPostmortem() {
 
   // A bridge disconnect can beat ReportCrash. Previously we looked just once
   // during cleanup and lost reports which appeared a little later.
-  const crashDirectory = path.join(homedir(), 'Library/Logs/DiagnosticReports')
+  const crashDirectories = [
+    ['user', path.join(homedir(), 'Library/Logs/DiagnosticReports')],
+    ['system', '/Library/Logs/DiagnosticReports'],
+  ]
   const copied = new Set()
   const deadline = Date.now() + (exitCode === 0 ? 0 : 45_000)
   do {
-    for (const name of await readdir(crashDirectory).catch(() => [])) {
-      if (!/^(SimpleCamera|SimCam|HarnessXCTestAgent).+\.(ips|crash)$/.test(name))
-        continue
-      if (copied.has(name)) continue
-      const file = path.join(crashDirectory, name)
-      const info = await stat(file)
-      if (info.isFile() && info.mtimeMs >= startedAt) {
-        await copyFile(file, path.join(artifacts, name))
-        copied.add(name)
-        trace('postmortem:crash-report', { name })
+    for (const [scope, crashDirectory] of crashDirectories) {
+      for (const name of await readdir(crashDirectory).catch(() => [])) {
+        if (!/^(SimpleCamera|SimCam|HarnessXCTestAgent).+\.(ips|crash)$/.test(name))
+          continue
+        const artifactName = `${scope}-${name}`
+        if (copied.has(artifactName)) continue
+        const file = path.join(crashDirectory, name)
+        const info = await stat(file)
+        if (info.isFile() && info.mtimeMs >= startedAt) {
+          await copyFile(file, path.join(artifacts, artifactName))
+          copied.add(artifactName)
+          trace('postmortem:crash-report', { name: artifactName })
+        }
       }
     }
-    if ([...copied].some((name) => name.startsWith('SimpleCamera'))) break
+    if ([...copied].some((name) => /^(user|system)-SimpleCamera/.test(name))) break
     if (Date.now() >= deadline) break
     await new Promise((resolve) => setTimeout(resolve, 1500))
   } while (Date.now() <= deadline)

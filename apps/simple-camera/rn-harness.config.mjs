@@ -98,6 +98,19 @@ const iosDevice = useIosSimulator
       },
     })
 
+const iosRunner = applePlatform({
+  name: 'ios',
+  device: iosDevice,
+  bundleId: iosBundleId,
+  appLaunchOptions: iosAppLaunchOptions,
+})
+if (process.env.HARNESS_SKIA_DIAGNOSTICS_DIR) {
+  iosRunner.runner = new URL(
+    './scripts/skia-apple-runner.mjs',
+    import.meta.url,
+  ).href
+}
+
 const config = {
   plugins: process.env.HARNESS_SKIA_DIAGNOSTICS_DIR
     ? [skiaDiagnostics.plugin]
@@ -111,12 +124,7 @@ const config = {
       device: androidDevice,
       bundleId: androidBundleId,
     }),
-    applePlatform({
-      name: 'ios',
-      device: iosDevice,
-      bundleId: iosBundleId,
-      appLaunchOptions: iosAppLaunchOptions,
-    }),
+    iosRunner,
   ],
   defaultRunner: 'android',
   bridgeTimeout,
