@@ -15,7 +15,7 @@ export default async function runAppleWithNativeLogs(config, harnessConfig, init
       let debuggerSession
       try {
         if (process.env.HARNESS_SKIA_LLDB === '1')
-          debuggerSession = await attachCrashDebugger()
+          debuggerSession = await attachCrashDebugger(process.env.HARNESS_SKIA_LLDB_PATH)
       } catch (error) {
         await session.dispose()
         throw error

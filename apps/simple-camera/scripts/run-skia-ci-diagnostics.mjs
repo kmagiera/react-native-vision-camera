@@ -7,6 +7,7 @@ import { createServer } from 'node:http'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
+import { prepareCrashDebugger } from './skia-crash-debugger.mjs'
 
 const exec = promisify(execFile)
 const artifacts = path.resolve('.harness/skia-diagnostics')
@@ -352,6 +353,13 @@ try {
     ],
     'app-architecture.txt',
   )
+
+  if (process.env.HARNESS_SKIA_LLDB === '1') {
+    trace('debugger:prepare-begin')
+    const debuggerInfo = await prepareCrashDebugger()
+    process.env.HARNESS_SKIA_LLDB_PATH = debuggerInfo.path
+    trace('debugger:prepared', debuggerInfo)
+  }
 
   // Continuous native log streaming consumed most of a CPU core in CI.
   // Keep Metro lifecycle events and host samples without that observer cost.

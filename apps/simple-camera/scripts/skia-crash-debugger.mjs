@@ -7,6 +7,17 @@ import { promisify } from 'node:util'
 
 const exec = promisify(execFile)
 
+export async function prepareCrashDebugger() {
+  const startedAt = Date.now()
+  // xcrun spent over 50s locating Xcode tools in the previous CI run. Resolve
+  // and load LLDB before app launch, outside the actual attach deadline.
+  const { stdout } = await exec('xcrun', ['--find', 'lldb'], { timeout: 120_000 })
+  const debuggerPath = stdout.trim()
+  if (!path.isAbsolute(debuggerPath)) throw new Error(`Invalid LLDB path: ${debuggerPath}`)
+  const { stdout: version } = await exec(debuggerPath, ['--version'], { timeout: 30_000 })
+  return { path: debuggerPath, version: version.trim(), elapsedMs: Date.now() - startedAt }
+}
+
 async function findAppPid() {
   const deadline = Date.now() + 60_000
   do {
@@ -30,17 +41,25 @@ async function findAppPid() {
   throw new Error('SimpleCamera did not launch before the debugger deadline')
 }
 
-export async function attachCrashDebugger() {
+export async function attachCrashDebugger(debuggerPath) {
+  if (!debuggerPath || !path.isAbsolute(debuggerPath))
+    throw new Error('LLDB must be prepared before launching the test app')
   const pid = await findAppPid()
-  const file = path.join(process.env.HARNESS_SKIA_DIAGNOSTICS_DIR, `lldb-${pid}.log`)
+  const artifacts = process.env.HARNESS_SKIA_DIAGNOSTICS_DIR
+  const file = path.join(artifacts, `lldb-${pid}.log`)
   const output = createWriteStream(file)
-  const child = spawn('xcrun', [
-    'lldb', '--no-lldbinit', '--batch', '--attach-pid', pid,
+  const child = spawn(debuggerPath, [
+    '--no-lldbinit', '--batch', '--attach-pid', pid,
     '-O', 'settings set auto-confirm true',
     '-O', 'settings set interpreter.stop-command-source-on-error false',
+    '-O', `log enable -T -f ${JSON.stringify(path.join(artifacts, `lldb-${pid}-packets.log`))} gdb-remote packets`,
+    '-O', `log enable -T -f ${JSON.stringify(path.join(artifacts, `lldb-${pid}-process.log`))} lldb process host`,
     '-o', 'process handle --stop false --notify false --pass true SIGPIPE SIGTERM',
     '-o', 'process handle --stop true --notify true --pass true SIGSEGV SIGBUS SIGILL SIGABRT',
     '-o', `script p = lldb.debugger.GetSelectedTarget().GetProcess(); assert p.IsValid() and p.GetProcessID() == ${pid} and p.GetState() == lldb.eStateStopped; print("SKIA_LLDB_ATTACHED", flush=True)`,
+    // Keep attach diagnostics, without logging protocol traffic during the test.
+    '-o', 'log disable gdb-remote',
+    '-o', 'log disable lldb',
     '-o', 'continue',
     '-k', 'process status',
     '-k', 'thread backtrace --count 60 all',
