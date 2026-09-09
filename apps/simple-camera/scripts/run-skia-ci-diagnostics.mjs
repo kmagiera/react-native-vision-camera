@@ -293,23 +293,8 @@ try {
     'app-architecture.txt',
   )
 
-  startProcess(
-    'xcrun',
-    [
-      'simctl',
-      'spawn',
-      udid,
-      'log',
-      'stream',
-      '--level',
-      'info',
-      '--style',
-      'compact',
-      '--predicate',
-      '(process == "SimpleCamera" AND subsystem != "com.apple.network" AND subsystem != "com.apple.CFNetwork") OR eventMessage CONTAINS[c] "SimCam"',
-    ],
-    'simulator.log',
-  )
+  // Continuous native log streaming consumed most of a CPU core in CI.
+  // Keep Metro lifecycle events and host samples without that observer cost.
   // No screenshots, recording or sampling while XCTest is being prepared.
   appPoll = setInterval(async () => {
     try {
