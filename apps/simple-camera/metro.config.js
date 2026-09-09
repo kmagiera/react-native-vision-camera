@@ -11,6 +11,14 @@ const root = path.resolve(__dirname, '..', '..')
  */
 const config = {
   watchFolders: [root],
+  ...(process.env.HARNESS_SKIA_DIAGNOSTICS_DIR
+    ? {
+        server: {
+          enhanceMiddleware: require('./scripts/skia-metro-diagnostics.cjs')
+            .enhanceMiddleware,
+        },
+      }
+    : {}),
 }
 
 module.exports = mergeConfig(getDefaultConfig(__dirname), config)

@@ -11,6 +11,7 @@ import { promisify } from 'node:util'
 const exec = promisify(execFile)
 const artifacts = path.resolve('.harness/skia-diagnostics')
 await mkdir(artifacts, { recursive: true })
+process.env.HARNESS_SKIA_DIAGNOSTICS_DIR = artifacts
 const startedAt = Date.now()
 const children = new Set()
 const captures = new Set()
@@ -18,6 +19,9 @@ const timers = new Set()
 let udid
 let interval
 let appPoll
+let hostInterval
+let hostProbe
+let recordingStarted = false
 let watchdog
 let hardStop
 let deadlineExceeded = false
@@ -43,7 +47,14 @@ async function command(file, args, name, timeout = 20_000) {
     if (name) await writeFile(path.join(artifacts, name), stdout + stderr)
     return stdout
   } catch (error) {
-    trace('diagnostic-command-failed', { file, args, error: String(error) })
+    trace('diagnostic-command-failed', {
+      file,
+      args,
+      error: String(error),
+      code: error.code,
+      signal: error.signal,
+      killed: error.killed,
+    })
     if (name)
       await writeFile(
         path.join(artifacts, name),
@@ -132,7 +143,20 @@ const server = createServer((request, response) => {
       trace('app-event', { event })
       if (event.stage === 'test:begin' && watchdog != null && !deadlineExceeded)
         armDeadline('test', 10 * 60_000)
-      if (event.stage === 'render:begin') {
+      if (
+        event.stage === 'test:begin' &&
+        watchdog != null &&
+        !deadlineExceeded &&
+        !recordingStarted
+      ) {
+        recordingStarted = true
+        startTestRecording()
+      }
+      if (
+        event.stage === 'render:begin' &&
+        watchdog != null &&
+        !deadlineExceeded
+      ) {
         const timer = setTimeout(() => {
           void capture('render-plus-5s', true)
         }, 5000)
@@ -155,6 +179,7 @@ function armDeadline(phase, timeout) {
   watchdog = setTimeout(() => {
     deadlineExceeded = true
     trace('diagnostic-deadline', { phase })
+    clearInterval(hostInterval)
     clearInterval(interval)
     clearInterval(appPoll)
     appPoll = undefined
@@ -165,8 +190,8 @@ function armDeadline(phase, timeout) {
   }, timeout)
 }
 
-function startAppDiagnostics(pids) {
-  trace('app:detected', { pids })
+function startTestRecording() {
+  trace('recording:begin')
   const recording = startProcess(
     'xcrun',
     [
@@ -186,16 +211,10 @@ function startAppDiagnostics(pids) {
       recording.child.kill('SIGINT')
     }, 10 * 60_000),
   )
-  void capture('app-launch')
+  void capture('test-start')
   interval = setInterval(() => {
     if (captures.size === 0) void capture('periodic')
   }, 60_000)
-  // Also retain a stack if startup stalls before the test's JS markers arrive.
-  timers.add(
-    setTimeout(() => {
-      void capture('app-plus-120s', true)
-    }, 120_000),
-  )
   void command(
     'simcamctl',
     [
@@ -205,7 +224,7 @@ function startAppDiagnostics(pids) {
       '--app',
       process.env.HARNESS_IOS_BUNDLE_ID,
     ],
-    'simcam-app-start.json',
+    'simcam-test-start.json',
   )
 }
 
@@ -256,11 +275,16 @@ try {
   // can be finalized and the failure screen captured after Harness exits.
   await command('uname', ['-m'], 'host-architecture.txt')
   await command('xcodebuild', ['-version'], 'xcode-version.txt')
-  await command(
-    'brew',
-    ['list', '--cask', '--versions', 'simcam'],
-    'simcam-version.txt',
-  )
+  for (const key of ['CFBundleShortVersionString', 'CFBundleVersion'])
+    await command(
+      '/usr/libexec/PlistBuddy',
+      [
+        '-c',
+        `Print :${key}`,
+        path.join(homedir(), 'Applications/SimCam.app/Contents/Info.plist'),
+      ],
+      `simcam-${key}.txt`,
+    )
   await command(
     'file',
     [
@@ -282,7 +306,7 @@ try {
       '--style',
       'compact',
       '--predicate',
-      'process == "SimpleCamera" OR eventMessage CONTAINS[c] "SimCam" OR process CONTAINS "HarnessXCTestAgent"',
+      '(process == "SimpleCamera" AND subsystem != "com.apple.network" AND subsystem != "com.apple.CFNetwork") OR eventMessage CONTAINS[c] "SimCam"',
     ],
     'simulator.log',
   )
@@ -295,7 +319,7 @@ try {
       if (appPoll === undefined) return
       clearInterval(appPoll)
       appPoll = undefined
-      startAppDiagnostics(stdout.trim().split(/\s+/))
+      trace('app:detected', { pids: stdout.trim().split(/\s+/) })
     } catch (error) {
       // pgrep exit 1 simply means Harness has not launched the app yet.
       if (error.code !== 1) trace('app-poll-error', { error: String(error) })
@@ -303,6 +327,22 @@ try {
   }, 15_000)
   trace('harness:begin')
   armDeadline('preparation', 25 * 60_000)
+  let hostSample = 0
+  hostInterval = setInterval(() => {
+    if (hostProbe) return
+    const name = `host-${++hostSample}`
+    trace('host:sample', { name })
+    hostProbe = Promise.all([
+      command(
+        'ps',
+        ['-A', '-o', 'pid,ppid,%cpu,rss,etime,comm'],
+        `${name}-processes.txt`,
+      ),
+      command('vm_stat', [], `${name}-memory.txt`),
+    ]).finally(() => {
+      hostProbe = undefined
+    })
+  }, 30_000)
   const harness = startProcess(
     '../../node_modules/.bin/react-native-harness',
     [
@@ -326,6 +366,7 @@ try {
   watchdog = undefined
   if (deadlineExceeded) exitCode = 124
   trace('harness:end', { exitCode })
+  clearInterval(hostInterval)
   clearInterval(interval)
   clearInterval(appPoll)
   appPoll = undefined
@@ -345,6 +386,7 @@ try {
 } catch (error) {
   trace('runner-error', { error: String(error), stack: error.stack })
 } finally {
+  clearInterval(hostInterval)
   clearInterval(interval)
   clearInterval(appPoll)
   appPoll = undefined
@@ -358,6 +400,7 @@ try {
     for (const child of children) child.kill('SIGKILL')
   }, 10_000)
   await Promise.all([
+    hostProbe,
     ...captures,
     ...[...children].map(
       (child) => new Promise((resolve) => child.once('close', resolve)),

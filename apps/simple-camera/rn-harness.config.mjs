@@ -8,6 +8,7 @@ import {
   applePlatform,
   appleSimulator,
 } from '@react-native-harness/platform-apple'
+import skiaDiagnostics from './scripts/skia-metro-diagnostics.cjs'
 
 const androidEmulatorName =
   process.env.HARNESS_ANDROID_EMULATOR ?? 'Pixel_API_35'
@@ -98,6 +99,9 @@ const iosDevice = useIosSimulator
     })
 
 const config = {
+  plugins: process.env.HARNESS_SKIA_DIAGNOSTICS_DIR
+    ? [skiaDiagnostics.plugin]
+    : [],
   entryPoint: './index.js',
   appRegistryComponentName: 'SimpleCamera',
   host: metroBindHost === '' ? undefined : metroBindHost,
