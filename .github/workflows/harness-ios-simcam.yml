@@ -84,8 +84,36 @@ jobs:
       - name: Install Skia binaries
         run: npx install-skia
 
+      # RN's artifact probe can silently fall back to a newer Hermes source
+      # commit. Use the exact Debug release from the successful baseline.
+      - name: Download pinned Hermes binary
+        id: hermes
+        timeout-minutes: 10
+        working-directory: apps/simple-camera
+        env:
+          HERMES_VERSION: "250829098.0.10"
+          HERMES_TARBALL_SHA256: "6041a81b8d7147e9b532ff48d273cfc69d60827ecabe0d9e677c060fbaa1213e"
+        run: |
+          set -euo pipefail
+          hermes_tag="$(node -p "require('node:fs').readFileSync(require('node:path').join(require('node:path').dirname(require.resolve('react-native/package.json')), 'sdks/.hermesv1version'), 'utf8').trim()")"
+          if [ "$hermes_tag" != "hermes-v$HERMES_VERSION" ]; then
+            echo "::error::Pinned Hermes $HERMES_VERSION does not match React Native's $hermes_tag."
+            exit 1
+          fi
+          hermes_archive="$RUNNER_TEMP/hermes-ios-$HERMES_VERSION-debug.tar.gz"
+          hermes_url="https://repo1.maven.org/maven2/com/facebook/hermes/hermes-ios/$HERMES_VERSION/hermes-ios-$HERMES_VERSION-hermes-ios-debug.tar.gz"
+          echo "Downloading pinned Hermes Debug $HERMES_VERSION from $hermes_url"
+          curl --fail --show-error --location \
+            --retry 4 --retry-all-errors --retry-delay 5 \
+            --connect-timeout 15 --max-time 120 --retry-max-time 480 \
+            --output "$hermes_archive" "$hermes_url"
+          printf '%s  %s\n' "$HERMES_TARBALL_SHA256" "$hermes_archive" | shasum -a 256 -c -
+          printf 'tarball=%s\n' "$hermes_archive" >> "$GITHUB_OUTPUT"
+
       - name: Install CocoaPods
         working-directory: apps/simple-camera
+        env:
+          HERMES_ENGINE_TARBALL_PATH: ${{ steps.hermes.outputs.tarball }}
         run: bundle exec pod install --project-directory=ios
 
       - name: Configure SimCam
