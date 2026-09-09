@@ -104,7 +104,8 @@ function capture(label, sample = false) {
         ['-p', pid, '-o', 'pid,ppid,%cpu,%mem,etime,command'],
         `${name}-${pid}-process.txt`,
       )
-      if (sample)
+      // LLDB already owns the process's debug session in catch-crash runs.
+      if (sample && process.env.HARNESS_SKIA_LLDB !== '1')
         await command(
           '/usr/bin/sample',
           [
