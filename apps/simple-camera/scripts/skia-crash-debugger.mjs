@@ -6,6 +6,13 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 
 const exec = promisify(execFile)
+const debuggerSetup = [
+  'settings set auto-confirm true',
+  // Defer symbol work until a backtrace is needed, keeping attach lighter.
+  // Local symbols remain available on demand when collecting a backtrace.
+  'settings set target.preload-symbols false',
+  'settings set symbols.enable-external-lookup false',
+]
 
 export async function prepareCrashDebugger() {
   const startedAt = Date.now()
@@ -14,7 +21,13 @@ export async function prepareCrashDebugger() {
   const { stdout } = await exec('xcrun', ['--find', 'lldb'], { timeout: 120_000 })
   const debuggerPath = stdout.trim()
   if (!path.isAbsolute(debuggerPath)) throw new Error(`Invalid LLDB path: ${debuggerPath}`)
-  const { stdout: version } = await exec(debuggerPath, ['--version'], { timeout: 30_000 })
+  // --version exits before the full debugger initializes. Warm the interpreter
+  // and validate its settings before the test app is running as well.
+  const { stdout: version } = await exec(debuggerPath, [
+    '--no-lldbinit', '--batch',
+    ...debuggerSetup.flatMap((command) => ['-o', command]),
+    '-o', 'version',
+  ], { timeout: 120_000 })
   return { path: debuggerPath, version: version.trim(), elapsedMs: Date.now() - startedAt }
 }
 
@@ -50,7 +63,7 @@ export async function attachCrashDebugger(debuggerPath) {
   const output = createWriteStream(file)
   const child = spawn(debuggerPath, [
     '--no-lldbinit', '--batch', '--attach-pid', pid,
-    '-O', 'settings set auto-confirm true',
+    ...debuggerSetup.flatMap((command) => ['-O', command]),
     '-O', 'settings set interpreter.stop-command-source-on-error false',
     '-O', `log enable -T -f ${JSON.stringify(path.join(artifacts, `lldb-${pid}-packets.log`))} gdb-remote packets`,
     '-O', `log enable -T -f ${JSON.stringify(path.join(artifacts, `lldb-${pid}-process.log`))} lldb process host`,
@@ -62,6 +75,7 @@ export async function attachCrashDebugger(debuggerPath) {
     '-o', 'log disable lldb',
     '-o', 'continue',
     '-k', 'process status',
+    '-k', 'thread backtrace --count 60',
     '-k', 'thread backtrace --count 60 all',
     '-k', 'register read',
     '-k', 'disassemble --pc --count 24',
@@ -79,7 +93,7 @@ export async function attachCrashDebugger(debuggerPath) {
   try {
     await new Promise((resolve, reject) => {
       let tail = ''
-      const timeout = setTimeout(() => settle(new Error('LLDB attach timed out')), 90_000)
+      const timeout = setTimeout(() => settle(new Error('LLDB attach timed out')), 300_000)
       const onError = (error) => settle(error)
       const onClose = (code) => settle(new Error(`LLDB exited before attaching: ${code}; see ${file}`))
       const onData = (chunk) => {
@@ -100,6 +114,15 @@ export async function attachCrashDebugger(debuggerPath) {
       child.once('close', onClose)
     })
   } catch (error) {
+    if (error.message === 'LLDB attach timed out' && child.pid !== undefined) {
+      // Only sample our own host debugger after a failed attach. No test is
+      // running yet, and no profiler is attached to the simulator app.
+      await exec('/usr/bin/sample', [
+        String(child.pid), '2', '-file', path.join(artifacts, `lldb-${pid}-attach-sample.txt`),
+      ], { timeout: 20_000 }).catch((sampleError) => {
+        output.write(`[skia-ci] LLDB sampling failed: ${sampleError}\n`)
+      })
+    }
     child.kill('SIGINT')
     const timeout = setTimeout(() => child.kill('SIGKILL'), 5000)
     await done
