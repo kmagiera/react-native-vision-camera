@@ -18,6 +18,10 @@ on:
           - x86_64
           - x86_64-no-barcode
           - arm64-no-barcode
+      prewarm_skia:
+        description: Measure and prewarm the complete Skia test bundle before app launch
+        type: boolean
+        default: false
   push:
     branches:
       - main
@@ -59,6 +63,7 @@ env:
   HARNESS_SIMCAM: "1"
   HARNESS_IOS_ARCH: ${{ inputs.variant == 'arm64-no-barcode' && 'arm64' || 'x86_64' }}
   HARNESS_DISABLE_BARCODE: ${{ contains(inputs.variant, 'no-barcode') && '1' || '0' }}
+  HARNESS_SKIA_PREWARM: ${{ inputs.prewarm_skia && '1' || '0' }}
   SIMCAM_SOURCE_IMAGE: apps/simple-camera/src/assets/simcam-harness-source.png
   DERIVED_DATA_PATH: build/harness/DerivedData
 

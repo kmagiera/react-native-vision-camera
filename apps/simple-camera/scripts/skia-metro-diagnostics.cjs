@@ -1,4 +1,4 @@
-// Temporary fork-only observations: no request, bundle or test behavior changes.
+// Temporary fork-only observations and an opt-in cold-bundle experiment.
 const { appendFileSync } = require('node:fs')
 const path = require('node:path')
 
@@ -25,12 +25,49 @@ function hook(context) {
   })
 }
 
+async function initializeMetro(context) {
+  hook(context)
+  if (process.env.HARNESS_SKIA_PREWARM !== '1') return
+
+  // Match Harness 1.4's fetchModule URL and consume the entire response.
+  // Its normal entry prewarm does not prepare this separate test bundle.
+  const url = new URL(
+    '/__tests__/visioncamera.skia-camera.harness.bundle',
+    `http://${context.host || '127.0.0.1'}:${context.port}`,
+  )
+  url.search = new URLSearchParams({ modulesOnly: 'true', platform: 'ios' })
+  const started = Date.now()
+  log('prewarm:started', { pathname: url.pathname })
+  try {
+    const response = await fetch(url, {
+      signal: AbortSignal.any([
+        context.abortSignal,
+        AbortSignal.timeout(300_000),
+      ]),
+    })
+    log('prewarm:headers', {
+      status: response.status,
+      elapsedMs: Date.now() - started,
+    })
+    let bytes = 0
+    for await (const chunk of response.body) bytes += chunk.byteLength
+    if (!response.ok) throw new Error(`Skia prewarm HTTP ${response.status}`)
+    log('prewarm:finished', { bytes, elapsedMs: Date.now() - started })
+  } catch (error) {
+    log('prewarm:failed', {
+      error: String(error),
+      elapsedMs: Date.now() - started,
+    })
+    throw error
+  }
+}
+
 exports.plugin = {
   name: 'skia-ci-diagnostics',
   hooks: {
     runtime: { ready: hook, disconnected: hook },
     metro: {
-      initialized: hook,
+      initialized: initializeMetro,
       bundleStarted: hook,
       bundleFinished: hook,
       bundleFailed: hook,
