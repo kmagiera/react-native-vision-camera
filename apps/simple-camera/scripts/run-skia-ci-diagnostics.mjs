@@ -17,6 +17,7 @@ const captures = new Set()
 const timers = new Set()
 let udid
 let interval
+let appPoll
 let watchdog
 let hardStop
 let deadlineExceeded = false
@@ -93,12 +94,18 @@ function capture(label, sample = false) {
         `${name}-${pid}-process.txt`,
       )
       if (sample)
-        await command('/usr/bin/sample', [
-          pid,
-          '2',
-          '-file',
-          path.join(artifacts, `${name}-${pid}-stacks.txt`),
-        ])
+        await command(
+          '/usr/bin/sample',
+          [
+            pid,
+            '2',
+            '-mayDie',
+            '-file',
+            path.join(artifacts, `${name}-${pid}-stacks.txt`),
+          ],
+          `${name}-${pid}-sample.log`,
+          60_000,
+        )
     }
     await screenshot
   })().catch((error) => trace('capture-error', { error: String(error) }))
@@ -108,7 +115,7 @@ function capture(label, sample = false) {
 }
 
 // Independent localhost endpoint keeps phase markers even if Harness never
-// receives the test result. It accepts only diagnostics from this runner's app.
+// receives the test result. The collector is restricted to this CI host.
 const server = createServer((request, response) => {
   if (request.method !== 'POST' || request.url !== '/phase') {
     response.writeHead(404).end()
@@ -123,6 +130,8 @@ const server = createServer((request, response) => {
     try {
       const event = JSON.parse(body)
       trace('app-event', { event })
+      if (event.stage === 'test:begin' && watchdog != null && !deadlineExceeded)
+        armDeadline('test', 10 * 60_000)
       if (event.stage === 'render:begin') {
         const timer = setTimeout(() => {
           void capture('render-plus-5s', true)
@@ -139,6 +148,67 @@ const server = createServer((request, response) => {
 function stopChildren() {
   for (const child of children) child.kill('SIGINT')
 }
+
+function armDeadline(phase, timeout) {
+  clearTimeout(watchdog)
+  trace('deadline:armed', { phase, timeout })
+  watchdog = setTimeout(() => {
+    deadlineExceeded = true
+    trace('diagnostic-deadline', { phase })
+    clearInterval(interval)
+    clearInterval(appPoll)
+    appPoll = undefined
+    stopChildren()
+    hardStop = setTimeout(() => {
+      for (const child of children) child.kill('SIGKILL')
+    }, 10_000)
+  }, timeout)
+}
+
+function startAppDiagnostics(pids) {
+  trace('app:detected', { pids })
+  const recording = startProcess(
+    'xcrun',
+    [
+      'simctl',
+      'io',
+      udid,
+      'recordVideo',
+      '--codec=h264',
+      path.join(artifacts, 'screen.mp4'),
+    ],
+    'screen-recording.log',
+  )
+  // Recording has its own cap, independent of the preparation/test budgets.
+  timers.add(
+    setTimeout(() => {
+      trace('recording:deadline')
+      recording.child.kill('SIGINT')
+    }, 10 * 60_000),
+  )
+  void capture('app-launch')
+  interval = setInterval(() => {
+    if (captures.size === 0) void capture('periodic')
+  }, 60_000)
+  // Also retain a stack if startup stalls before the test's JS markers arrive.
+  timers.add(
+    setTimeout(() => {
+      void capture('app-plus-120s', true)
+    }, 120_000),
+  )
+  void command(
+    'simcamctl',
+    [
+      'diagnostics',
+      '--device',
+      udid,
+      '--app',
+      process.env.HARNESS_IOS_BUNDLE_ID,
+    ],
+    'simcam-app-start.json',
+  )
+}
+
 process.once('SIGTERM', stopChildren)
 process.once('SIGINT', stopChildren)
 
@@ -203,24 +273,12 @@ try {
     'xcrun',
     [
       'simctl',
-      'io',
-      udid,
-      'recordVideo',
-      '--codec=h264',
-      path.join(artifacts, 'screen.mp4'),
-    ],
-    'screen-recording.log',
-  )
-  startProcess(
-    'xcrun',
-    [
-      'simctl',
       'spawn',
       udid,
       'log',
       'stream',
       '--level',
-      'debug',
+      'info',
       '--style',
       'compact',
       '--predicate',
@@ -228,10 +286,23 @@ try {
     ],
     'simulator.log',
   )
-  interval = setInterval(() => {
-    void capture('periodic', captureNumber % 3 === 0)
+  // No screenshots, recording or sampling while XCTest is being prepared.
+  appPoll = setInterval(async () => {
+    try {
+      const { stdout } = await exec('pgrep', ['-x', 'SimpleCamera'], {
+        timeout: 10_000,
+      })
+      if (appPoll === undefined) return
+      clearInterval(appPoll)
+      appPoll = undefined
+      startAppDiagnostics(stdout.trim().split(/\s+/))
+    } catch (error) {
+      // pgrep exit 1 simply means Harness has not launched the app yet.
+      if (error.code !== 1) trace('app-poll-error', { error: String(error) })
+    }
   }, 15_000)
   trace('harness:begin')
+  armDeadline('preparation', 25 * 60_000)
   const harness = startProcess(
     '../../node_modules/.bin/react-native-harness',
     [
@@ -250,20 +321,14 @@ try {
     'harness.log',
     true,
   )
-  // Bounded recording even if Harness or the bridge hangs permanently.
-  watchdog = setTimeout(() => {
-    deadlineExceeded = true
-    trace('diagnostic-deadline')
-    clearInterval(interval)
-    stopChildren()
-    hardStop = setTimeout(() => {
-      for (const child of children) child.kill('SIGKILL')
-    }, 10_000)
-  }, 600_000)
   exitCode = await harness.done
+  clearTimeout(watchdog)
+  watchdog = undefined
   if (deadlineExceeded) exitCode = 124
   trace('harness:end', { exitCode })
   clearInterval(interval)
+  clearInterval(appPoll)
+  appPoll = undefined
   for (const timer of timers) clearTimeout(timer)
   await capture('final', exitCode !== 0)
   await command(
@@ -281,7 +346,10 @@ try {
   trace('runner-error', { error: String(error), stack: error.stack })
 } finally {
   clearInterval(interval)
+  clearInterval(appPoll)
+  appPoll = undefined
   clearTimeout(watchdog)
+  watchdog = undefined
   clearTimeout(hardStop)
   for (const timer of timers) clearTimeout(timer)
   stopChildren()
