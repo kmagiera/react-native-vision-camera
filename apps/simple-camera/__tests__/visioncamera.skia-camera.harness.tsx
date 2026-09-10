@@ -10,6 +10,10 @@ import {
 import type { CameraDevice, Size } from 'react-native-vision-camera'
 import { CommonResolutions, VisionCamera } from 'react-native-vision-camera'
 import { SkiaCamera } from 'react-native-vision-camera-skia'
+import {
+  clearSurfacesCache,
+  getSurface,
+} from 'react-native-vision-camera-skia/src/SurfacesCache'
 import { provider as workletsProvider } from 'react-native-vision-camera-worklets'
 import { scheduleOnRN } from 'react-native-worklets'
 import { deferred, withTimeout } from './test-utils'
@@ -249,5 +253,27 @@ describe('VisionCamera - SkiaCamera targetResolution', () => {
     const native = await nativeFrameOutputSize(backDevice, targetResolution)
 
     expect(getEdges(skia)).toEqual(getEdges(native))
+  })
+})
+
+describe('VisionCamera - Skia surface cache', () => {
+  it('keeps a borrowed Skia surface usable after clearing the cache', () => {
+    const surface = getSurface(16, 16)
+    const canvas = surface.getCanvas()
+
+    clearSurfacesCache()
+
+    // Like renderToTexture, retain the Surface while using its borrowed Canvas.
+    canvas.save()
+    canvas.restore()
+    const snapshot = surface.makeImageSnapshot()
+    try {
+      expect({ width: snapshot.width(), height: snapshot.height() }).toEqual({
+        width: 16,
+        height: 16,
+      })
+    } finally {
+      snapshot.dispose()
+    }
   })
 })

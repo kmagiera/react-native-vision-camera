@@ -415,7 +415,10 @@ try {
       '--runTestsByPath',
       '__tests__/visioncamera.skia-camera.harness.tsx',
       '--testNamePattern',
-      'falls back to the useFrameOutput default when targetResolution is omitted',
+      [
+        'falls back to the useFrameOutput default when targetResolution is omitted',
+        'keeps a borrowed Skia surface usable after clearing the cache',
+      ].join('|'),
       '--json',
       `--outputFile=${path.join(artifacts, 'results.json')}`,
     ],
