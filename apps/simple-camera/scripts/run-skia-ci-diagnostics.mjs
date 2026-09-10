@@ -13,6 +13,7 @@ const exec = promisify(execFile)
 const artifacts = path.resolve('.harness/skia-diagnostics')
 await mkdir(artifacts, { recursive: true })
 process.env.HARNESS_SKIA_DIAGNOSTICS_DIR = artifacts
+const liveDiagnostics = process.env.HARNESS_SKIA_LIVE_DIAGNOSTICS !== '0'
 const startedAt = Date.now()
 const children = new Set()
 const captures = new Set()
@@ -146,6 +147,7 @@ const server = createServer((request, response) => {
       if (event.stage === 'test:begin' && watchdog != null && !deadlineExceeded)
         armDeadline('test', 10 * 60_000)
       if (
+        liveDiagnostics &&
         event.stage === 'test:begin' &&
         watchdog != null &&
         !deadlineExceeded &&
@@ -155,6 +157,7 @@ const server = createServer((request, response) => {
         startTestRecording()
       }
       if (
+        liveDiagnostics &&
         event.stage === 'render:begin' &&
         watchdog != null &&
         !deadlineExceeded
@@ -364,41 +367,43 @@ try {
     trace('debugger:prepared', debuggerInfo)
   }
 
-  // Continuous native log streaming consumed most of a CPU core in CI.
-  // Keep Metro lifecycle events and host samples without that observer cost.
-  // No screenshots, recording or sampling while XCTest is being prepared.
-  appPoll = setInterval(async () => {
-    try {
-      const { stdout } = await exec('pgrep', ['-x', 'SimpleCamera'], {
-        timeout: 10_000,
+  // Keep lifecycle events and postmortem logs even when live observers are
+  // disabled, so we can measure their effect on first-frame latency.
+  trace('diagnostics:config', { liveDiagnostics })
+  if (liveDiagnostics) {
+    appPoll = setInterval(async () => {
+      try {
+        const { stdout } = await exec('pgrep', ['-x', 'SimpleCamera'], {
+          timeout: 10_000,
+        })
+        if (appPoll === undefined) return
+        clearInterval(appPoll)
+        appPoll = undefined
+        trace('app:detected', { pids: stdout.trim().split(/\s+/) })
+      } catch (error) {
+        // pgrep exit 1 simply means Harness has not launched the app yet.
+        if (error.code !== 1) trace('app-poll-error', { error: String(error) })
+      }
+    }, 15_000)
+    let hostSample = 0
+    hostInterval = setInterval(() => {
+      if (hostProbe) return
+      const name = `host-${++hostSample}`
+      trace('host:sample', { name })
+      hostProbe = Promise.all([
+        command(
+          'ps',
+          ['-A', '-o', 'pid,ppid,%cpu,rss,etime,comm'],
+          `${name}-processes.txt`,
+        ),
+        command('vm_stat', [], `${name}-memory.txt`),
+      ]).finally(() => {
+        hostProbe = undefined
       })
-      if (appPoll === undefined) return
-      clearInterval(appPoll)
-      appPoll = undefined
-      trace('app:detected', { pids: stdout.trim().split(/\s+/) })
-    } catch (error) {
-      // pgrep exit 1 simply means Harness has not launched the app yet.
-      if (error.code !== 1) trace('app-poll-error', { error: String(error) })
-    }
-  }, 15_000)
+    }, 30_000)
+  }
   trace('harness:begin')
   armDeadline('preparation', 25 * 60_000)
-  let hostSample = 0
-  hostInterval = setInterval(() => {
-    if (hostProbe) return
-    const name = `host-${++hostSample}`
-    trace('host:sample', { name })
-    hostProbe = Promise.all([
-      command(
-        'ps',
-        ['-A', '-o', 'pid,ppid,%cpu,rss,etime,comm'],
-        `${name}-processes.txt`,
-      ),
-      command('vm_stat', [], `${name}-memory.txt`),
-    ]).finally(() => {
-      hostProbe = undefined
-    })
-  }, 30_000)
   const harness = startProcess(
     '../../node_modules/.bin/react-native-harness',
     [

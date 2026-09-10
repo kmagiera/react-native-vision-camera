@@ -26,6 +26,10 @@ on:
         description: Attach LLDB before the test and save native stacks on crash
         type: boolean
         default: false
+      live_diagnostics:
+        description: Record, screenshot and sample processes during the test
+        type: boolean
+        default: true
   push:
     branches:
       - main
@@ -69,6 +73,7 @@ env:
   HARNESS_DISABLE_BARCODE: ${{ contains(inputs.variant, 'no-barcode') && '1' || '0' }}
   HARNESS_SKIA_PREWARM: ${{ inputs.prewarm_skia && '1' || '0' }}
   HARNESS_SKIA_LLDB: ${{ inputs.catch_native_crash && '1' || '0' }}
+  HARNESS_SKIA_LIVE_DIAGNOSTICS: ${{ inputs.live_diagnostics && '1' || '0' }}
   SIMCAM_SOURCE_IMAGE: apps/simple-camera/src/assets/simcam-harness-source.png
   DERIVED_DATA_PATH: build/harness/DerivedData
 
