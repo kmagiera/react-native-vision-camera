@@ -12,22 +12,18 @@ const MAXIMUM_SURFACE_CACHE_AGE_MS = 15_000
 const surfacesCache = createSynchronizable<SurfaceCache[]>([])
 
 /**
- * Clears the internal {@linkcode SkSurface} cache, disposing every cached
- * Surface.
+ * Clears the internal {@linkcode SkSurface} cache without invalidating
+ * Surfaces that an in-flight render may still be using.
  *
  * Surfaces are otherwise kept alive for up to 15 seconds of inactivity per
- * thread to avoid re-creating them on every Frame. Call this on teardown to
- * release GPU memory eagerly.
+ * thread to avoid re-creating them on every Frame. Once no references remain,
+ * Skia's host object cleanup schedules GPU resource release on their original
+ * thread.
  *
  * @internal
  */
 export function clearSurfacesCache() {
-  surfacesCache.setBlocking((surfaces) => {
-    for (const surface of surfaces) {
-      surface.surface.dispose()
-    }
-    return []
-  })
+  surfacesCache.setBlocking([])
 }
 
 /**
@@ -77,15 +73,14 @@ export function getSurface(width: number, height: number): SkSurface {
     // Return the new one
     return newSurface
   } finally {
-    // Remove all cached Surfaces that haven't been used in >10 seconds
+    // Remove all cached Surfaces that haven't been used in >15 seconds.
     let counter = 0
     while (counter <= cachedSurfaces.length) {
       const c = cachedSurfaces[counter]
       if (c == null) break
       const keep = now - c.lastUsedTimestamp <= MAXIMUM_SURFACE_CACHE_AGE_MS
       if (!keep) {
-        // Remove this surface!
-        c.surface.dispose()
+        // Drop the cache reference without invalidating an in-flight render.
         cachedSurfaces.splice(counter, 1)
         continue
       }

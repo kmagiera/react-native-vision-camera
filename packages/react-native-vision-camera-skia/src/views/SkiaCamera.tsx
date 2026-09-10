@@ -423,7 +423,7 @@ function SkiaCameraImpl({
 
   useEffect(() => {
     return () => {
-      // On unmount, clear the Surfaces cache to free up memory.
+      // Release cached references; an in-flight render retains its own Surface.
       clearSurfacesCache()
     }
   }, [])
