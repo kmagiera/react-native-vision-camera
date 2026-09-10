@@ -1,0 +1,12 @@
+--- a/dist/xcrun/simctl.js
++++ b/dist/xcrun/simctl.js
+@@ -159,8 +159,9 @@
+     return spawn('xcrun', [
+         'simctl',
+         'launch',
+         '--console',
++        '--wait-for-debugger',
+         '--terminate-running-process',
+         udid,
+         bundleId,
+         ...argumentsList,

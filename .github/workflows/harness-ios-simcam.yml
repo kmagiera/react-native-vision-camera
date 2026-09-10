@@ -172,6 +172,16 @@ jobs:
           echo "Built simulator architecture: $actual_arch (expected $HARNESS_IOS_ARCH)"
           test "$actual_arch" = "$HARNESS_IOS_ARCH"
 
+      # Keep app startup/network requests from running during LLDB attachment.
+      # Patch only the diagnostic launch path; ordinary runs stay unchanged.
+      - name: Prepare suspended launch for LLDB
+        if: ${{ inputs.catch_native_crash }}
+        working-directory: apps/simple-camera
+        run: >-
+          patch --batch --forward --fuzz=0 -p1
+          -d ../../node_modules/@react-native-harness/platform-apple
+          < scripts/skia-wait-for-debugger.patch
+
       - name: Run isolated Skia test with diagnostics
         timeout-minutes: 40
         working-directory: apps/simple-camera
