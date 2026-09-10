@@ -72,7 +72,11 @@ const iosAppLaunchOptions = iosMetroHostPort
   : undefined
 
 const isCI = process.env.CI === 'true'
-const bundleStartTimeout = isCI ? 90_000 : 15_000
+// LLDB can pause dyld while resolving images after the initial continue.
+// Allow for this only during diagnostic startup, not during test execution.
+const bundleStartTimeout = process.env.HARNESS_SKIA_LLDB === '1'
+  ? 300_000
+  : isCI ? 90_000 : 15_000
 const bridgeTimeout = isCI ? 120_000 : 45_000
 const maxAppRestarts = isCI ? 4 : 2
 

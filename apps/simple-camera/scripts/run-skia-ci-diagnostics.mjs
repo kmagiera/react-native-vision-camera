@@ -233,14 +233,17 @@ function startTestRecording() {
 async function collectPostmortem() {
   // Read persisted logs only AFTER Harness and our observers have stopped.
   // This cannot compete with mounting or processing the first Skia frame.
-  trace('postmortem:begin')
+  // A stalled teardown can outlast a short fixed lookback window. Include
+  // the whole run so its earlier termination/startup events are not lost.
+  const lookback = `${Math.max(180, Math.ceil((Date.now() - startedAt) / 1000))}s`
+  trace('postmortem:begin', { lookback })
   if (udid) {
     const predicate =
       'process == "SimpleCamera" OR ' +
       '((process == "ReportCrash" OR process == "runningboardd" OR process == "SpringBoard") AND ' +
       '(eventMessage CONTAINS "SimpleCamera" OR eventMessage CONTAINS "com.margelo.nitro.camera.example.simple"))'
     const args = [
-      'show', '--last', '3m', '--style', 'compact', '--info', '--predicate', predicate,
+      'show', '--last', lookback, '--style', 'compact', '--info', '--predicate', predicate,
     ]
     await Promise.all([
       command(
